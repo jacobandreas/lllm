@@ -1,0 +1,3 @@
+trainPath: /Users/jda/Corpora/treebank/Brown.txt
+testPath: /Users/jda/Corpora/treebank/wsj/allsents_00.txt
+experimentPath: work
