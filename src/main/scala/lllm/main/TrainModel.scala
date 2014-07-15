@@ -9,6 +9,8 @@ import breeze.features.FeatureVector
 import breeze.numerics.{log, exp}
 import breeze.optimize.FirstOrderMinimizer.OptParams
 import lllm.model.LogLinearLanguageModel
+import scala.collection.mutable.ArrayBuffer
+import scala.collection.mutable
 
 /**
  * @author jda
@@ -44,7 +46,7 @@ class TrainModel(foo: Int = 1) extends Stage {
 
           logger.info(s"batch: $batch")
 
-          batch.par.foreach { batchIndex =>
+          batch.foreach { batchIndex =>
             val batchDataSamples: Seq[Array[Int]] = getDisk(Symbol(s"DataGroup$batchIndex"))
             val batchNoiseSamples: Seq[IndexedSeq[Array[Int]]] = getDisk(Symbol(s"NoiseGroup$batchIndex"))
 
@@ -53,7 +55,36 @@ class TrainModel(foo: Int = 1) extends Stage {
               // here we're just using the "noise" samples from NCE to get a monte carlo estimate of the partition
               // this is wrong because the noise samples are non-uniform---just a quick hack until we add NCE
 
-              // TODO(jda) remove maps and foreaches (or just go straight to the real training procedure?)
+              // there doesn't seem to be a significant performance difference between the following two impls:
+
+              // "fast"
+
+//              val fvData = new FeatureVector(data)
+//              val score = theta dot fvData
+//              ll += score
+//              axpy(1d, fvData, grad)
+//
+//              //val noiseExpScores = new ArrayBuffer[Double](noise.size + 1)
+//              val noiseExpScores = new Array[Double](noise.size + 1)
+//              var i = 0
+//              while (i < noise.size) {
+//                noiseExpScores.update(i, exp(theta dot new FeatureVector(noise(i))))
+//                i += 1
+//              }
+//              noiseExpScores.update(noise.size, exp(score))
+//              val norm = sum(noiseExpScores) / noiseExpScores.length * vocabIndex.size
+//              ll -= log(norm)
+//
+//              i = 0
+//              while (i < noise.size) {
+//                axpy(-noiseExpScores(i) / norm, new FeatureVector(noise(i)), grad)
+//                i += 1
+//              }
+//              axpy(-noiseExpScores(noise.size) / norm, fvData, grad)
+
+
+              // "slow"
+
               val score = theta dot new FeatureVector(data)
               val noiseExpScores = (noise :+ data).map(x => exp(theta dot new FeatureVector(x))).toSeq
               val norm = sum(noiseExpScores) / (1 + noise.length) * vocabIndex.size
@@ -62,7 +93,7 @@ class TrainModel(foo: Int = 1) extends Stage {
               ll -= log(norm)
               //assert(score - log(norm) <= 0)
 
-              axpy(1d, data, grad)
+              axpy(1d, new FeatureVector(data), grad)
               noiseExpScores zip (noise :+ data) foreach { case (dScore, dFeat) => axpy(-dScore / norm, new FeatureVector(dFeat), grad) }
             }
           }
