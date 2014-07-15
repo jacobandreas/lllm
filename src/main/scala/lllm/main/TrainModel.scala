@@ -20,13 +20,13 @@ class TrainModel(foo: Int = 1) extends Stage {
     val featureIndex: Index[String] = getDisk[Index[String]]('FeatureIndex)
 
     val optimization = OptParams(useStochastic = true, batchSize = 5, maxIterations = 50)
-    val optTheta = optimization.minimize(makeObjective, DenseVector.zeros[Double](featureIndex.size))
+    val optTheta = optimization.minimize(makeObjectiveCD, DenseVector.zeros[Double](featureIndex.size))
     //GradientTester.test(makeObjective, DenseVector.zeros[Double](featureIndex.size), toString = featureIndex.get)
     put('Model, new LogLinearLanguageModel(get('Featurizer), get('FeatureIndex), get('VocabIndex), optTheta))
 
   }
 
-  def makeObjective: BatchDiffFunction[DenseVector[Double]] = {
+  def makeObjectiveCD: BatchDiffFunction[DenseVector[Double]] = {
 
     val featureIndex: Index[String] = getDisk[Index[String]]('FeatureIndex)
     val vocabIndex: Index[String] = getDisk[Index[String]]('VocabIndex)
@@ -48,18 +48,14 @@ class TrainModel(foo: Int = 1) extends Stage {
             val batchDataSamples: Seq[Array[Int]] = getDisk(Symbol(s"DataGroup$batchIndex"))
             val batchNoiseSamples: Seq[IndexedSeq[Array[Int]]] = getDisk(Symbol(s"NoiseGroup$batchIndex"))
 
-            batchDataSamples zip batchNoiseSamples foreach { case (rawData, rawNoise) =>
-
-              // TODO(jda) is this cheaper than inline?
-              val data = new FeatureVector(rawData)
-              val noise = rawNoise map { new FeatureVector(_) }
+            batchDataSamples zip batchNoiseSamples foreach { case (data, noise) =>
 
               // here we're just using the "noise" samples from NCE to get a monte carlo estimate of the partition
               // this is wrong because the noise samples are non-uniform---just a quick hack until we add NCE
 
               // TODO(jda) remove maps and foreaches (or just go straight to the real training procedure?)
-              val score = theta dot data
-              val noiseExpScores = (noise :+ data).map(x => exp(theta dot x)).toSeq
+              val score = theta dot new FeatureVector(data)
+              val noiseExpScores = (noise :+ data).map(x => exp(theta dot new FeatureVector(x))).toSeq
               val norm = sum(noiseExpScores) / (1 + noise.length) * vocabIndex.size
 
               ll += score
@@ -67,7 +63,7 @@ class TrainModel(foo: Int = 1) extends Stage {
               //assert(score - log(norm) <= 0)
 
               axpy(1d, data, grad)
-              noiseExpScores zip (noise :+ data) foreach { case (sc, ft) => axpy(-sc / norm, ft, grad) }
+              noiseExpScores zip (noise :+ data) foreach { case (dScore, dFeat) => axpy(-dScore / norm, new FeatureVector(dFeat), grad) }
             }
           }
           (-ll, -grad)
