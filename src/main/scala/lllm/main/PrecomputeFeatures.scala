@@ -38,32 +38,35 @@ class PrecomputeFeatures(val trainPath: String,
     val noiseDistribution = Multinomial[Counter[String,Double],String](counts)
     //val normalizedCounts = counts / sum(counts)
 
-    putDisk('UnigramModel, new UnigramLanguageModel(counts))
+    val unigramModel = new UnigramLanguageModel(counts)
+    putDisk('UnigramModel, unigramModel)
 
     task("caching features") {
       val lineGroups = corpus.lineGroupIterator(featureGroupSize)
       lineGroups.zipWithIndex.foreach { case (lines, group) =>
         task(s"batch $group") {
-          val dataFeatures: Seq[Array[Int]] = task("data") { lines.flatMap { line =>
+          val (dataFeatures, dataProbs): (Seq[Array[Int]], Seq[Double]) = task("data") { lines.flatMap { line =>
             line.split(" ").toIndexedSeq.nGrams(order).map { ngram =>
-              Featurizer(ngram).flatMap(feats.indexOpt).toArray
+              (Featurizer(ngram).flatMap(feats.indexOpt).toArray, unigramModel.prob(ngram))
             }
-          }}
+          }}.unzip
 
-          val noiseFeatures: Seq[IndexedSeq[Array[Int]]] = task("noise") { lines.flatMap { line =>
+          val (noiseFeatures, noiseProbs): (Seq[IndexedSeq[Array[Int]]], Seq[IndexedSeq[Double]]) = task("noise") { lines.flatMap { line =>
             line.split(" ").toIndexedSeq.nGrams(order).map { ngram =>
               val samples = noiseDistribution.sample(noiseSamples) :+ ngram(ngram.length - 1)
               samples.map { sample =>
                 val noisedNGram = ngram.take(ngram.length - 1) :+ sample
                 //logger.info(noisedNGram.toString)
                 // TODO(jda) use negative feature hashing instead of just throwing these away
-                Featurizer(noisedNGram).flatMap(feats.indexOpt).toArray
-              }
+                (Featurizer(noisedNGram).flatMap(feats.indexOpt).toArray, unigramModel.prob(ngram))
+              }.unzip
             }
-          }}
+          }}.unzip
 
-          putDisk(Symbol(s"DataGroup$group"), dataFeatures)
-          putDisk(Symbol(s"NoiseGroup$group"), noiseFeatures)
+          putDisk(Symbol(s"DataFeatures$group"), dataFeatures)
+          putDisk(Symbol(s"NoiseFeatures$group"), noiseFeatures)
+          putDisk(Symbol(s"DataProbs$group"), dataProbs)
+          putDisk(Symbol(s"NoiseProbs$group"), noiseProbs)
         }
       }
     }

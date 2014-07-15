@@ -6,23 +6,24 @@ import breeze.optimize.{DiffFunction, GradientTester, BatchDiffFunction}
 import breeze.linalg._
 import breeze.util.Index
 import breeze.features.FeatureVector
-import breeze.numerics.{log, exp}
+import breeze.numerics.{sigmoid, log, exp}
 import breeze.optimize.FirstOrderMinimizer.OptParams
-import lllm.model.LogLinearLanguageModel
+import lllm.model.{UnigramLanguageModel, LogLinearLanguageModel}
 import scala.collection.mutable.ArrayBuffer
 import scala.collection.mutable
 
 /**
  * @author jda
  */
-class TrainModel(foo: Int = 1) extends Stage {
+// TODO(jda): for erector: default params should be set centrally
+class TrainModel(noiseSamples: Int = 10) extends Stage {
 
   override def run(): Unit = {
 
     val featureIndex: Index[String] = getDisk[Index[String]]('FeatureIndex)
 
     val optimization = OptParams(useStochastic = true, batchSize = 5, maxIterations = 50)
-    val optTheta = optimization.minimize(makeObjectiveCD, DenseVector.zeros[Double](featureIndex.size))
+    val optTheta = optimization.minimize(makeObjectiveNCE, DenseVector.zeros[Double](featureIndex.size))
     //GradientTester.test(makeObjective, DenseVector.zeros[Double](featureIndex.size), toString = featureIndex.get)
     put('Model, new LogLinearLanguageModel(get('Featurizer), get('FeatureIndex), get('VocabIndex), optTheta))
 
@@ -47,8 +48,8 @@ class TrainModel(foo: Int = 1) extends Stage {
           logger.info(s"batch: $batch")
 
           batch.foreach { batchIndex =>
-            val batchDataSamples: Seq[Array[Int]] = getDisk(Symbol(s"DataGroup$batchIndex"))
-            val batchNoiseSamples: Seq[IndexedSeq[Array[Int]]] = getDisk(Symbol(s"NoiseGroup$batchIndex"))
+            val batchDataSamples: Seq[Array[Int]] = getDisk(Symbol(s"DataFeatures$batchIndex"))
+            val batchNoiseSamples: Seq[IndexedSeq[Array[Int]]] = getDisk(Symbol(s"NoiseFeatures$batchIndex"))
 
             batchDataSamples zip batchNoiseSamples foreach { case (data, noise) =>
 
@@ -101,5 +102,54 @@ class TrainModel(foo: Int = 1) extends Stage {
         }
       }
     }
+  }
+
+  // TODO refactor out inner loop (shared with CD)
+  def makeObjectiveNCE: BatchDiffFunction[DenseVector[Double]] = {
+
+    val featureIndex: Index[String] = getDisk('FeatureIndex)
+    val vocabIndex: Index[String] = getDisk('VocabIndex)
+    val unigramModel: UnigramLanguageModel = getDisk('UnigramModel)
+
+    new BatchDiffFunction[DenseVector[Double]] {
+
+      override def fullRange: IndexedSeq[Int] = 0 until get('NLineGroups)
+
+      override def calculate(theta: DenseVector[Double], batch: IndexedSeq[Int]): (Double, DenseVector[Double]) = {
+
+        task("calculating") {
+
+          val grad = DenseVector.zeros[Double](featureIndex.size)
+          var ll = 0d
+
+          logger.info(s"batch: $batch")
+
+          batch.foreach { batchIndex =>
+            val batchDataSamples: Seq[Array[Int]] = getDisk(Symbol(s"DataFeatures$batchIndex"))
+            val batchNoiseSamples: Seq[IndexedSeq[Array[Int]]] = getDisk(Symbol(s"NoiseFeatures$batchIndex"))
+            val batchDataProbs: Seq[Double] = getDisk(Symbol(s"DataProbs$batchIndex"))
+            val batchNoiseProbs: Seq[IndexedSeq[Double]] = getDisk(Symbol(s"NoiseProbs$batchIndex"))
+
+            (batchDataSamples zip batchDataProbs) zip (batchNoiseSamples zip batchNoiseProbs) foreach {
+              case ((data, dataProb), (noise, noiseProbs)) =>
+
+                val pData = sigmoid((theta dot new FeatureVector(data)) - log(noiseSamples * dataProb))
+                val pNoise = noise zip noiseProbs map { case (n, np) => sigmoid((theta dot new FeatureVector(n)) - log(noiseSamples * np)) }
+
+                ll += log(pData)
+                ll += sum(pNoise.map(x => log(1 - x)))
+
+                axpy(1 - pData, new FeatureVector(data), grad)
+                pNoise zip noise foreach { case (p, n) => axpy(-p, new FeatureVector(n), grad) }
+
+            }
+          }
+          (-ll, -grad)
+        }
+
+      }
+
+    }
+
   }
 }
