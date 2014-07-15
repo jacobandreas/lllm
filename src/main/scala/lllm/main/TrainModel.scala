@@ -26,14 +26,6 @@ class TrainModel(foo: Int = 1) extends Stage {
 
   }
 
-  def myDot(theta: DenseVector[Double], phi: Array[Int]): Double = {
-    phi.foldLeft(0d)((accum, i) => accum + theta(i))
-  }
-
-  def myAxpy(a: Double, x: Array[Int], y: Vector[Double]) {
-    x.foreach { y(_) += a }
-  }
-
   def makeObjective: BatchDiffFunction[DenseVector[Double]] = {
 
     val featureIndex: Index[String] = getDisk[Index[String]]('FeatureIndex)
@@ -47,46 +39,40 @@ class TrainModel(foo: Int = 1) extends Stage {
 
         task("calculating") {
 
-        val grad = DenseVector.zeros[Double](featureIndex.size)
-        var ll = 0d
+          val grad = DenseVector.zeros[Double](featureIndex.size)
+          var ll = 0d
 
-        logger.info(s"batch: $batch")
+          logger.info(s"batch: $batch")
 
-        batch.par.foreach { batchIndex =>
-          val batchDataSamples: Seq[Array[Int]] = getDisk(Symbol(s"DataGroup$batchIndex"))
-          val batchNoiseSamples: Seq[IndexedSeq[Array[Int]]] = getDisk(Symbol(s"NoiseGroup$batchIndex"))
+          batch.par.foreach { batchIndex =>
+            val batchDataSamples: Seq[Array[Int]] = getDisk(Symbol(s"DataGroup$batchIndex"))
+            val batchNoiseSamples: Seq[IndexedSeq[Array[Int]]] = getDisk(Symbol(s"NoiseGroup$batchIndex"))
 
-          batchDataSamples zip batchNoiseSamples foreach { case (data, noise) =>
+            batchDataSamples zip batchNoiseSamples foreach { case (rawData, rawNoise) =>
 
-            // here we're just using the "noise" samples from NCE to get a monte carlo estimate of the partition
-            // this is wrong because the noise samples are non-uniform---just a quick hack until we add NCE
-            // myX methods are faster than instantiating a new FeatureVector
-            // (TODO: just make the FeatureVector once when we load the data)
+              // TODO(jda) is this cheaper than inline?
+              val data = new FeatureVector(rawData)
+              val noise = rawNoise map { new FeatureVector(_) }
 
-            val score = myDot(theta, data)
+              // here we're just using the "noise" samples from NCE to get a monte carlo estimate of the partition
+              // this is wrong because the noise samples are non-uniform---just a quick hack until we add NCE
 
-            val noiseExpScores = (noise :+ data).map(n => exp(myDot(theta,n))).toSeq
+              // TODO(jda) remove maps and foreaches (or just go straight to the real training procedure?)
+              val score = theta dot data
+              val noiseExpScores = (noise :+ data).map(x => exp(theta dot x)).toSeq
+              val norm = sum(noiseExpScores) / (1 + noise.length) * vocabIndex.size
 
-            val norm = sum(noiseExpScores) / (1 + noise.length) * vocabIndex.size
+              ll += score
+              ll -= log(norm)
+              //assert(score - log(norm) <= 0)
 
-            ll += score
-            ll -= log(norm)
-
-            //assert(score - log(norm) <= 0)
-
-            myAxpy(1d, data, grad)
-            noiseExpScores zip (noise :+ data) foreach { case (sc, ft) => myAxpy(-sc / norm, ft, grad) }
+              axpy(1d, data, grad)
+              noiseExpScores zip (noise :+ data) foreach { case (sc, ft) => axpy(-sc / norm, ft, grad) }
+            }
           }
-
+          (-ll, -grad)
         }
-
-        (-ll, -grad)
-
-        }
-
       }
-
     }
   }
-
 }

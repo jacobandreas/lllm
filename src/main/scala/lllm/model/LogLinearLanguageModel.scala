@@ -16,10 +16,10 @@ class LogLinearLanguageModel(featurizer: Featurizer,
                              val theta: DenseVector[Double]) extends LanguageModel with Serializable {
 
   def logProb(ngram: IndexedSeq[String]): Double = {
-    val logNumerator = new FeatureVector(featurizer(ngram).map(featureIndex).toArray) dot theta
-    //val logDenominator = sum(vocabIndex.map { w => exp(new FeatureVector(featurizer(ngram.take(ngram.length-1) :+ w).map(featureIndex).toArray) dot theta)})
-    val logDenominator = softmax(vocabIndex.map { w => new FeatureVector(featurizer(ngram.take(ngram.length-1) :+ w).map(featureIndex).toArray) dot theta })
-    //println(s"$logNumerator, $logDenominator")
+    val logNumerator = theta dot new FeatureVector(featurizer(ngram).map(featureIndex).toArray)
+    val logDenominator = softmax(vocabIndex.map {
+      w => theta dot new FeatureVector(featurizer(ngram.take(ngram.length-1) :+ w).map(featureIndex).toArray)
+    })
     logNumerator - logDenominator
   }
 

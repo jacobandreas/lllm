@@ -7,6 +7,7 @@ import erector.util.text.toNGramIterable
 import breeze.linalg.{sum, Counter}
 import lllm.model.UnigramLanguageModel
 import breeze.util.Index
+import breeze.features.FeatureVector
 
 /**
  * @author jda
@@ -45,7 +46,7 @@ class PrecomputeFeatures(val trainPath: String,
         task(s"batch $group") {
           val dataFeatures: Seq[Array[Int]] = task("data") { lines.flatMap { line =>
             line.split(" ").toIndexedSeq.nGrams(order).map { ngram =>
-              Featurizer(ngram).map(feats).toArray
+              Featurizer(ngram).flatMap(feats.indexOpt).toArray
             }
           }}
 
