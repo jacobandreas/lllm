@@ -8,6 +8,7 @@ import breeze.linalg.{sum, Counter}
 import lllm.model.UnigramLanguageModel
 import breeze.util.Index
 import breeze.features.FeatureVector
+import lllm.util.HuffmanDict
 
 /**
  * @author jda
@@ -38,18 +39,33 @@ class PrecomputeFeatures(val trainPath: String,
     val noiseDistribution = Multinomial[Counter[String,Double],String](counts)
     //val normalizedCounts = counts / sum(counts)
 
+    //val huffmanDict = HuffmanDict.fromMap(counts.mapPairs((word,count) => (corpus.vocabularyIndex(word), count)).toMap)
+    val huffmanDict = task("building Huffman dictionary") {
+      //val intCounts = counts.toMap.map { case (word, count) => corpus.vocabularyIndex(word) -> count}
+      //val intCounts: Iterable[(Int,Double)] = counts.mapPairs { case (word, count) => (corpus.vocabularyIndex(word), count) }
+      val intCounts = counts.keysIterator.map { key => (corpus.vocabularyIndex(key), counts(key)) }.toIterable
+      HuffmanDict.fromCounts(intCounts)
+    }
+    putDisk('HuffmanDict, huffmanDict)
+
     val unigramModel = new UnigramLanguageModel(counts)
     putDisk('UnigramModel, unigramModel)
 
     task("caching features") {
       val lineGroups = corpus.lineGroupIterator(featureGroupSize)
       lineGroups.zipWithIndex.foreach { case (lines, group) =>
+
         task(s"batch $group") {
           val (dataFeatures, dataProbs): (Seq[Array[Int]], Seq[Double]) = task("data") { lines.flatMap { line =>
             line.split(" ").toIndexedSeq.nGrams(order).map { ngram =>
               (Featurizer(ngram).flatMap(feats.indexOpt).toArray, unigramModel.prob(ngram))
             }
           }}.unzip
+
+          assert(lines.isTraversableAgain)
+          val wordIds: Seq[Int] = lines.flatMap { line =>
+            line.split(" ") map corpus.vocabularyIndex
+          }
 
           val (noiseFeatures, noiseProbs): (Seq[IndexedSeq[Array[Int]]], Seq[IndexedSeq[Double]]) = task("noise") { lines.flatMap { line =>
             line.split(" ").toIndexedSeq.nGrams(order).map { ngram =>

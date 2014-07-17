@@ -9,8 +9,7 @@ import breeze.numerics.{exp, log2, log}
 /**
  * @author jda
  */
-class Evaluate(val foo: Int = 0,
-               val order: Int = 3,
+class Evaluate(val order: Int = 3,
                val testPath: String) extends Stage {
 
   override def run(): Unit = {

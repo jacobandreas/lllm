@@ -11,6 +11,7 @@ import breeze.optimize.FirstOrderMinimizer.OptParams
 import lllm.model.{UnigramLanguageModel, LogLinearLanguageModel}
 import scala.collection.mutable.ArrayBuffer
 import scala.collection.mutable
+import lllm.util.HuffmanDict
 
 /**
  * @author jda
@@ -20,19 +21,75 @@ class TrainModel(noiseSamples: Int = 10) extends Stage {
 
   override def run(): Unit = {
 
-    val featureIndex: Index[String] = getDisk[Index[String]]('FeatureIndex)
+    val featureIndex: Index[String] = getDisk('FeatureIndex)
+    val huffmanDict: HuffmanDict[Int] = get('HuffmanDict)
 
-    val optimization = OptParams(useStochastic = true, batchSize = 5, maxIterations = 50)
-    val optTheta = optimization.minimize(makeObjectiveNCE, DenseVector.zeros[Double](featureIndex.size))
+    val optimization = OptParams(useStochastic = true, batchSize = 5, maxIterations = 500)
+    //val optTheta = optimization.minimize(makeObjectiveNoiseContrastive, DenseVector.zeros[Double](featureIndex.size))
+    val optTheta = optimization.minimize(makeObjectiveHierarchical, DenseVector.zeros[Double](featureIndex.size * huffmanDict.prefixIndex.size))
     //GradientTester.test(makeObjective, DenseVector.zeros[Double](featureIndex.size), toString = featureIndex.get)
     put('Model, new LogLinearLanguageModel(get('Featurizer), get('FeatureIndex), get('VocabIndex), optTheta))
 
   }
 
-  def makeObjectiveCD: BatchDiffFunction[DenseVector[Double]] = {
+  def makeObjectiveHierarchical: BatchDiffFunction[DenseVector[Double]] = {
 
-    val featureIndex: Index[String] = getDisk[Index[String]]('FeatureIndex)
-    val vocabIndex: Index[String] = getDisk[Index[String]]('VocabIndex)
+    val featureIndex: Index[String] = getDisk('FeatureIndex)
+    val vocabIndex: Index[String] = getDisk('VocabIndex)
+    val huffmanDict: HuffmanDict[Int] = get('HuffmanDict)
+
+    new BatchDiffFunction[DenseVector[Double]] {
+
+      override def fullRange: IndexedSeq[Int] = 0 until get('NLineGroups)
+
+      override def calculate(theta: DenseVector[Double], batch: IndexedSeq[Int]): (Double, DenseVector[Double]) = {
+
+        val matTheta = theta.asDenseMatrix.reshape(featureIndex.size, huffmanDict.prefixIndex.size)
+
+        task("calculating") {
+
+          val grad = DenseMatrix.zeros[Double](featureIndex.size, huffmanDict.prefixIndex.size)
+          var ll = 0d
+
+          batch.foreach { batchIndex =>
+            val batchDataSamples: Seq[Array[Int]] = getDisk(Symbol(s"DataFeatures$batchIndex"))
+            val batchWordIds: Seq[Int] = getDisk(Symbol(s"WordIds$batchIndex"))
+
+            batchDataSamples zip batchWordIds foreach { case (feats, word) =>
+              val code = huffmanDict.dict.get(word).get
+              (0 until code.length) foreach { prefixLength =>
+
+                val decision = if(code.head) 1d else -1d
+                val history = code.tail
+
+                val nodeId = huffmanDict.prefixIndex(history)
+                val thetaNode = matTheta(::, nodeId)
+
+                val score = (thetaNode dot new FeatureVector(feats)) * decision
+
+                ll += log(1 + exp(score))
+                axpy(sigmoid(-score), new FeatureVector(feats), thetaNode)
+
+              }
+
+            }
+
+          }
+
+          (-ll, -grad.toDenseVector)
+
+        }
+
+      }
+
+    }
+
+  }
+
+  def makeObjectiveMonteCarlo: BatchDiffFunction[DenseVector[Double]] = {
+
+    val featureIndex: Index[String] = getDisk('FeatureIndex)
+    val vocabIndex: Index[String] = getDisk('VocabIndex)
 
     new BatchDiffFunction[DenseVector[Double]] {
 
@@ -105,7 +162,7 @@ class TrainModel(noiseSamples: Int = 10) extends Stage {
   }
 
   // TODO refactor out inner loop (shared with CD)
-  def makeObjectiveNCE: BatchDiffFunction[DenseVector[Double]] = {
+  def makeObjectiveNoiseContrastive: BatchDiffFunction[DenseVector[Double]] = {
 
     val featureIndex: Index[String] = getDisk('FeatureIndex)
     val vocabIndex: Index[String] = getDisk('VocabIndex)
@@ -141,7 +198,6 @@ class TrainModel(noiseSamples: Int = 10) extends Stage {
 
                 axpy(1 - pData, new FeatureVector(data), grad)
                 pNoise zip noise foreach { case (p, n) => axpy(-p, new FeatureVector(n), grad) }
-
             }
           }
           (-ll, -grad)
