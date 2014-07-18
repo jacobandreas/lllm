@@ -24,6 +24,9 @@ class TrainModel(noiseSamples: Int = 10) extends Stage {
     val featureIndex: Index[String] = getDisk('FeatureIndex)
     val huffmanDict: HuffmanDict[Int] = get('HuffmanDict)
 
+    logger.info(s"${featureIndex.size} features")
+    logger.info(s"${huffmanDict.prefixIndex.size} Huffman nodes")
+
     val optimization = OptParams(useStochastic = true, batchSize = 5, maxIterations = 500)
     //val optTheta = optimization.minimize(makeObjectiveNoiseContrastive, DenseVector.zeros[Double](featureIndex.size))
     val optTheta = optimization.minimize(makeObjectiveHierarchical, DenseVector.zeros[Double](featureIndex.size * huffmanDict.prefixIndex.size))

@@ -24,7 +24,7 @@ class PrecomputeFeatures(val trainPath: String,
 
   override def run(): Unit = {
 
-    val corpus = TextCorpusReader(trainPath)
+    val corpus = TextCorpusReader(trainPath).dummy()
     val featureCounts = task("counting features") { Counter(corpus.nGramIterator(order).flatMap { nGram => Featurizer(nGram).map((_,1)) }) }
     //logger.info(featureCounts.toString)
     val feats = task("building feature index") { Index(corpus.nGramFeatureIndexer(order, Featurizer).filter(featureCounts(_) > 5)) }
@@ -43,6 +43,7 @@ class PrecomputeFeatures(val trainPath: String,
     val huffmanDict = task("building Huffman dictionary") {
       //val intCounts = counts.toMap.map { case (word, count) => corpus.vocabularyIndex(word) -> count}
       //val intCounts: Iterable[(Int,Double)] = counts.mapPairs { case (word, count) => (corpus.vocabularyIndex(word), count) }
+      counts.keysIterator.foreach { key => corpus.vocabularyIndex(key) }
       val intCounts = counts.keysIterator.map { key => (corpus.vocabularyIndex(key), counts(key)) }.toIterable
       HuffmanDict.fromCounts(intCounts)
     }
@@ -83,6 +84,7 @@ class PrecomputeFeatures(val trainPath: String,
           putDisk(Symbol(s"NoiseFeatures$group"), noiseFeatures)
           putDisk(Symbol(s"DataProbs$group"), dataProbs)
           putDisk(Symbol(s"NoiseProbs$group"), noiseProbs)
+          putDisk(Symbol(s"WordIds$group"), wordIds)
         }
       }
     }

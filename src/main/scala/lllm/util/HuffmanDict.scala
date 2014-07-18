@@ -12,7 +12,7 @@ case class HuffmanNode[L](weight: Double,
                           left: Option[HuffmanNode[L]],
                           right: Option[HuffmanNode[L]]) extends Ordered[HuffmanNode[L]] {
 
-  def compare(that: HuffmanNode[L]): Int = this.weight compare that.weight
+  def compare(that: HuffmanNode[L]): Int = -(this.weight compare that.weight)
 
 }
 
@@ -22,13 +22,12 @@ object HuffmanDict {
 
   def fromCounts[L](counts: Iterable[(L,Double)]): HuffmanDict[L] = {
     val pq = mutable.PriorityQueue[HuffmanNode[L]]()
-    counts.foreach { case (word, count) => pq.enqueue(HuffmanNode(count, Some(word), None, None)); println(pq.size) }
+    counts.foreach { case (word, count) => pq.enqueue(HuffmanNode(count, Some(word), None, None)) }
     while (pq.size > 1) {
       val n1 = pq.dequeue()
       val n2 = pq.dequeue()
       val newNode = HuffmanNode(n1.weight + n2.weight, None, Some(n1), Some(n2))
       pq.enqueue(newNode)
-      println(pq.size)
     }
 
     val root = pq.dequeue()
