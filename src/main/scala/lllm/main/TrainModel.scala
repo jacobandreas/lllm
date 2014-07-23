@@ -8,6 +8,7 @@ import breeze.util.Index
 import breeze.features.FeatureVector
 import breeze.numerics.{sigmoid, log, exp}
 import breeze.optimize.FirstOrderMinimizer.OptParams
+import lllm.features.HashingFeatureIndex
 import lllm.model.{UnigramLanguageModel, LogLinearLanguageModel}
 import scala.collection.mutable.ArrayBuffer
 import scala.collection.mutable
@@ -21,7 +22,7 @@ class TrainModel(noiseSamples: Int = 10) extends Stage {
 
   override def run(): Unit = {
 
-    val featureIndex: Index[String] = getDisk('FeatureIndex)
+    val featureIndex: HashingFeatureIndex = getDisk('FeatureIndex)
     val huffmanDict: HuffmanDict[Int] = get('HuffmanDict)
 
     logger.info(s"${featureIndex.size} features")

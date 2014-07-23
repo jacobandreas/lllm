@@ -2,7 +2,7 @@ package lllm.main
 
 import igor.experiment.Stage
 import erector.corpus.TextCorpusReader
-import lllm.features.{ConstantFeaturizer, NGramFeaturizer, WordAndIndexFeaturizer}
+import lllm.features.{HashingFeatureIndex, ConstantFeaturizer, NGramFeaturizer, WordAndIndexFeaturizer}
 import erector.util.text.toNGramIterable
 import breeze.linalg.{sum, Counter}
 import lllm.model.UnigramLanguageModel
@@ -24,10 +24,11 @@ class PrecomputeFeatures(val trainPath: String,
 
   override def run(): Unit = {
 
-    val corpus = TextCorpusReader(trainPath).dummy()
+    val corpus = TextCorpusReader(trainPath)
     val featureCounts = task("counting features") { Counter(corpus.nGramIterator(order).flatMap { nGram => Featurizer(nGram).map((_,1)) }) }
     //logger.info(featureCounts.toString)
-    val feats = task("building feature index") { Index(corpus.nGramFeatureIndexer(order, Featurizer).filter(featureCounts(_) > 5)) }
+    val posFeats = task("building feature index") { Index(corpus.nGramFeatureIndexer(order, Featurizer).filter(featureCounts(_) > 5)) }
+    val feats = HashingFeatureIndex(posFeats)
     //logger.info(feats.toString)
 
     putDisk('FeatureIndex, feats)
