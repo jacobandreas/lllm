@@ -8,3 +8,4 @@ project
 .idea*
 .idea
 work/
+*.hprof.txt
