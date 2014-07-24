@@ -33,10 +33,12 @@ class PrecomputeFeatures(val trainPath: String,
     val corpus = TextCorpusReader(trainPath)
     val featureCounts = task("counting features") { Counter(corpus.nGramIterator(order).flatMap { nGram => Featurizer(nGram).map((_,1)) }) }
     val posFeats = task("building feature index") { Index(corpus.nGramFeatureIndexer(order, Featurizer).filter(featureCounts(_) > 5)) }
-    val feats = if (useHashing)
-                  HashingFeatureIndex(posFeats)
-                else
-                  posFeats
+    val feats = {
+      if (useHashing)
+        HashingFeatureIndex(posFeats)
+      else
+        posFeats
+    }
 
     putDisk('FeatureIndex, feats)
     putDisk('Featurizer, Featurizer)

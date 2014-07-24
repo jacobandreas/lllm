@@ -17,10 +17,9 @@ class LogLinearLanguageModel(featurizer: Featurizer,
 
   def logProb(ngram: IndexedSeq[String]): Double = {
     val logNumerator = theta dot new FeatureVector(featurizer(ngram).map(featureIndex).toArray)
-//    val logDenominator = softmax(vocabIndex.map {
-//      w => theta dot new FeatureVector(featurizer(ngram.take(ngram.length-1) :+ w).map(featureIndex).toArray)
-//    })
-    val logDenominator = 0
+    val logDenominator = softmax(vocabIndex.map {
+      w => theta dot new FeatureVector(featurizer(ngram.take(ngram.length-1) :+ w).map(featureIndex).toArray)
+    })
     logNumerator - logDenominator
   }
 

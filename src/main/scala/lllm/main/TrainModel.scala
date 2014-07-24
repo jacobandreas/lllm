@@ -21,19 +21,20 @@ import lllm.util.HuffmanDict
 // TODO(jda): for erector: default params should be set centrally
 class TrainModel(noiseSamples: Int = 10,
                  useHashing: Boolean = false,
-                 objectiveType: ObjectiveType = CD,
-                 rank: Int = 50) extends Stage {
+                 objectiveType: ObjectiveType = LowRank,
+                 rank: Int = 10) extends Stage {
 
   override def run(): Unit = {
 
     val featureIndex: Index[String] = getDisk('FeatureIndex)
-    val huffmanDict: HuffmanDict[Int] = get('HuffmanDict)
 
     val optimization = OptParams(useStochastic = true, batchSize = 5, maxIterations = 500)
 
     val initTheta = objectiveType match {
-      case Hierarchical => DenseVector.zeros[Double](featureIndex.size * huffmanDict.prefixIndex.size)
-      case LowRank => DenseVector.zeros[Double](featureIndex.size * rank)
+      case Hierarchical =>
+        val huffmanDict: HuffmanDict[Int] = get('HuffmanDict)
+        DenseVector.zeros[Double](featureIndex.size * huffmanDict.prefixIndex.size)
+      case LowRank => DenseVector.rand[Double](featureIndex.size * rank)
       case _ => DenseVector.zeros[Double](featureIndex.size)
     }
 
@@ -43,9 +44,10 @@ class TrainModel(noiseSamples: Int = 10,
       case CD => makeObjectiveMonteCarlo
       case NCE => makeObjectiveNoiseContrastive
       case LowRank => makeObjectiveLowRank
-      case _ => { assert(false); makeObjectiveLowRank }
+      case _ => { assert(false); makeObjectiveMonteCarlo }
     }
 
+    //GradientTester.test(objective, initTheta, toString = (x: Int) => x.toString, randFraction = 1)
     val optTheta = optimization.minimize(objective, initTheta)
     put('Model, new LogLinearLanguageModel(get('Featurizer), get('FeatureIndex), get('VocabIndex), optTheta))
 
@@ -65,6 +67,8 @@ class TrainModel(noiseSamples: Int = 10,
       override def calculate(theta: DenseVector[Double], batch: IndexedSeq[Int]): (Double, DenseVector[Double]) = {
 
         val matTheta = theta.asDenseMatrix.reshape(featureIndex.size, rank)
+        // would be nice to precompute this, but we can't fit it in memory
+        // val dots = matTheta * matTheta.t
 
         task("calculating") {
 
@@ -79,41 +83,45 @@ class TrainModel(noiseSamples: Int = 10,
 
             batchDataSamples zip batchNoiseSamples foreach { case (data, noise) =>
 
+              // TODO(jda) every pair of for loops does twice as much work as necessary
               var score = 0d
               data.foreach { featI =>
                 data.foreach { featJ =>
-                  score += matTheta(featI, ::).t dot matTheta(featJ, ::).t
+                  //score += dots(featI, featJ)
+                  score += matTheta(featI,::).t dot matTheta(featJ,::).t
                 }
               }
               val denomScores = (noise :+ data) map { sample: Array[Int] =>
                 var sampleScore = 0d
                 sample.foreach { featI =>
                   sample.foreach { featJ =>
-                    sampleScore += matTheta(featI, ::).t dot matTheta(featJ, ::).t
+                    //sampleScore += dots(featI, featJ)
+                    sampleScore += matTheta(featI,::).t dot matTheta(featJ,::).t
                   }
                 }
                 exp(sampleScore)
               }
 
-              val norm = sum(denomScores) / (1 + noise.length) * vocabIndex.size
+              val norm = sum(denomScores)
 
               ll += score
               ll -= log(norm)
 
               data.foreach { featI =>
                 data.foreach { featJ =>
-                  axpy(1d, matTheta(featJ,::).t, grad(featI,::).t)
+                  axpy(2d, matTheta(featJ,::).t, grad(featI,::).t)
                 }
               }
               denomScores zip (noise :+ data) foreach { case (dScore, dFeat) =>
                 dFeat.foreach { featI =>
                   dFeat.foreach { featJ =>
-                    axpy(-dScore / norm, matTheta(featJ,::).t, grad(featI,::).t)
+                    axpy(-2d * dScore / norm, matTheta(featJ,::).t, grad(featI,::).t)
                   }
                 }
               }
             }
           }
+          //logger.info(grad.toString)
           (-ll, -grad.toDenseVector)
         }
       }
@@ -224,7 +232,7 @@ class TrainModel(noiseSamples: Int = 10,
 
               val score = theta dot new FeatureVector(data)
               val noiseExpScores = (noise :+ data).map(x => exp(theta dot new FeatureVector(x))).toSeq
-              val norm = sum(noiseExpScores) / (1 + noise.length) * vocabIndex.size
+              val norm = sum(noiseExpScores) // just a constant factor to make denom the right size // / (1 + noise.length) * vocabIndex.size
 
               ll += score
               ll -= log(norm)
