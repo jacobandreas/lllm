@@ -1,5 +1,6 @@
 package lllm.main
 
+import breeze.stats.distributions.Uniform
 import igor.experiment.Stage
 import erector.corpus.TextCorpusReader
 import lllm.features.{HashingFeatureIndex, ConstantFeaturizer, NGramFeaturizer, WordAndIndexFeaturizer}
@@ -9,6 +10,7 @@ import lllm.model.UnigramLanguageModel
 import breeze.util.Index
 import breeze.features.FeatureVector
 import lllm.util.HuffmanDict
+import lllm.model.ObjectiveType._
 
 /**
  * @author jda
@@ -16,20 +18,25 @@ import lllm.util.HuffmanDict
 class PrecomputeFeatures(val trainPath: String,
                          val order: Int = 3,
                          val featureGroupSize: Int = 1000,
-                         val noiseSamples: Int = 10) extends Stage {
+                         val noiseSamples: Int = 10,
+                         val useHashing: Boolean = false,
+                         val objectiveType: ObjectiveType = CD) extends Stage {
 
-  //final val LineGroupSize = 3000
-  final val Featurizer = NGramFeaturizer(1, order) + WordAndIndexFeaturizer() + ConstantFeaturizer()
-  //final val NoiseSamples = 10
+  val includeWordIdentityInFeature = objectiveType != Hierarchical
+
+  final val Featurizer = NGramFeaturizer(1, order, includeWordIdentityInFeature) +
+                         WordAndIndexFeaturizer(includeWordIdentityInFeature) +
+                         ConstantFeaturizer()
 
   override def run(): Unit = {
 
     val corpus = TextCorpusReader(trainPath)
     val featureCounts = task("counting features") { Counter(corpus.nGramIterator(order).flatMap { nGram => Featurizer(nGram).map((_,1)) }) }
-    //logger.info(featureCounts.toString)
     val posFeats = task("building feature index") { Index(corpus.nGramFeatureIndexer(order, Featurizer).filter(featureCounts(_) > 5)) }
-    val feats = HashingFeatureIndex(posFeats)
-    //logger.info(feats.toString)
+    val feats = if (useHashing)
+                  HashingFeatureIndex(posFeats)
+                else
+                  posFeats
 
     putDisk('FeatureIndex, feats)
     putDisk('Featurizer, Featurizer)
@@ -40,15 +47,14 @@ class PrecomputeFeatures(val trainPath: String,
     val noiseDistribution = Multinomial[Counter[String,Double],String](counts)
     //val normalizedCounts = counts / sum(counts)
 
-    //val huffmanDict = HuffmanDict.fromMap(counts.mapPairs((word,count) => (corpus.vocabularyIndex(word), count)).toMap)
-    val huffmanDict = task("building Huffman dictionary") {
-      //val intCounts = counts.toMap.map { case (word, count) => corpus.vocabularyIndex(word) -> count}
-      //val intCounts: Iterable[(Int,Double)] = counts.mapPairs { case (word, count) => (corpus.vocabularyIndex(word), count) }
-      counts.keysIterator.foreach { key => corpus.vocabularyIndex(key) }
-      val intCounts = counts.keysIterator.map { key => (corpus.vocabularyIndex(key), counts(key)) }.toIterable
-      HuffmanDict.fromCounts(intCounts)
+    if (objectiveType == Hierarchical) {
+      val huffmanDict = task("building Huffman dictionary") {
+        counts.keysIterator.foreach { key => corpus.vocabularyIndex(key)}
+        val intCounts = counts.keysIterator.map { key => (corpus.vocabularyIndex(key), counts(key))}.toIterable
+        HuffmanDict.fromCounts(intCounts)
+      }
+      putDisk('HuffmanDict, huffmanDict)
     }
-    putDisk('HuffmanDict, huffmanDict)
 
     val unigramModel = new UnigramLanguageModel(counts)
     putDisk('UnigramModel, unigramModel)
@@ -71,11 +77,13 @@ class PrecomputeFeatures(val trainPath: String,
 
           val (noiseFeatures, noiseProbs): (Seq[IndexedSeq[Array[Int]]], Seq[IndexedSeq[Double]]) = task("noise") { lines.flatMap { line =>
             line.split(" ").toIndexedSeq.nGrams(order).map { ngram =>
-              val samples = noiseDistribution.sample(noiseSamples) :+ ngram(ngram.length - 1)
+              val samples = if (objectiveType == NCE)
+                              // TODO(jda) this should be a uniform sample
+                              noiseDistribution.sample(noiseSamples)
+                            else
+                              noiseDistribution.sample(noiseSamples)
               samples.map { sample =>
                 val noisedNGram = ngram.take(ngram.length - 1) :+ sample
-                //logger.info(noisedNGram.toString)
-                // TODO(jda) use negative feature hashing instead of just throwing these away
                 (Featurizer(noisedNGram).flatMap(feats.indexOpt).toArray, unigramModel.prob(ngram))
               }.unzip
             }

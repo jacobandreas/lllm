@@ -9,6 +9,7 @@ import breeze.features.FeatureVector
 import breeze.numerics.{sigmoid, log, exp}
 import breeze.optimize.FirstOrderMinimizer.OptParams
 import lllm.features.HashingFeatureIndex
+import lllm.model.ObjectiveType._
 import lllm.model.{UnigramLanguageModel, LogLinearLanguageModel}
 import scala.collection.mutable.ArrayBuffer
 import scala.collection.mutable
@@ -18,28 +19,110 @@ import lllm.util.HuffmanDict
  * @author jda
  */
 // TODO(jda): for erector: default params should be set centrally
-class TrainModel(noiseSamples: Int = 10) extends Stage {
+class TrainModel(noiseSamples: Int = 10,
+                 useHashing: Boolean = false,
+                 objectiveType: ObjectiveType = CD,
+                 rank: Int = 50) extends Stage {
 
   override def run(): Unit = {
 
-    val featureIndex: HashingFeatureIndex = getDisk('FeatureIndex)
+    val featureIndex: Index[String] = getDisk('FeatureIndex)
     val huffmanDict: HuffmanDict[Int] = get('HuffmanDict)
 
-    logger.info(s"${featureIndex.size} features")
-    logger.info(s"${huffmanDict.prefixIndex.size} Huffman nodes")
-
     val optimization = OptParams(useStochastic = true, batchSize = 5, maxIterations = 500)
-    //val optTheta = optimization.minimize(makeObjectiveNoiseContrastive, DenseVector.zeros[Double](featureIndex.size))
-    val optTheta = optimization.minimize(makeObjectiveHierarchical, DenseVector.zeros[Double](featureIndex.size * huffmanDict.prefixIndex.size))
-    //GradientTester.test(makeObjective, DenseVector.zeros[Double](featureIndex.size), toString = featureIndex.get)
+
+    val initTheta = objectiveType match {
+      case Hierarchical => DenseVector.zeros[Double](featureIndex.size * huffmanDict.prefixIndex.size)
+      case LowRank => DenseVector.zeros[Double](featureIndex.size * rank)
+      case _ => DenseVector.zeros[Double](featureIndex.size)
+    }
+
+    // TODO(jda) low rank is actually orthogonal to everything else---generalize later
+    val objective = objectiveType match {
+      case Hierarchical => makeObjectiveHierarchical
+      case CD => makeObjectiveMonteCarlo
+      case NCE => makeObjectiveNoiseContrastive
+      case LowRank => makeObjectiveLowRank
+      case _ => { assert(false); makeObjectiveLowRank }
+    }
+
+    val optTheta = optimization.minimize(objective, initTheta)
     put('Model, new LogLinearLanguageModel(get('Featurizer), get('FeatureIndex), get('VocabIndex), optTheta))
 
+  }
+
+  // TODO(jda) refactor inner loop out of all of the following
+
+  def makeObjectiveLowRank: BatchDiffFunction[DenseVector[Double]] = {
+
+    val featureIndex: Index[String] = getDisk('FeatureIndex)
+    val vocabIndex: Index[String] = getDisk('VocabIndex)
+
+    new BatchDiffFunction[DenseVector[Double]] {
+
+      override def fullRange: IndexedSeq[Int] = 0 until get('NLineGroups)
+
+      override def calculate(theta: DenseVector[Double], batch: IndexedSeq[Int]): (Double, DenseVector[Double]) = {
+
+        val matTheta = theta.asDenseMatrix.reshape(featureIndex.size, rank)
+
+        task("calculating") {
+
+          val grad = DenseMatrix.zeros[Double](featureIndex.size, rank)
+          var ll = 0d
+
+          logger.info(s"batch: $batch")
+
+          batch.foreach { batchIndex =>
+            val batchDataSamples: Seq[Array[Int]] = getDisk(Symbol(s"DataFeatures$batchIndex"))
+            val batchNoiseSamples: Seq[IndexedSeq[Array[Int]]] = getDisk(Symbol(s"NoiseFeatures$batchIndex"))
+
+            batchDataSamples zip batchNoiseSamples foreach { case (data, noise) =>
+
+              var score = 0d
+              data.foreach { featI =>
+                data.foreach { featJ =>
+                  score += matTheta(featI, ::).t dot matTheta(featJ, ::).t
+                }
+              }
+              val denomScores = (noise :+ data) map { sample: Array[Int] =>
+                var sampleScore = 0d
+                sample.foreach { featI =>
+                  sample.foreach { featJ =>
+                    sampleScore += matTheta(featI, ::).t dot matTheta(featJ, ::).t
+                  }
+                }
+                exp(sampleScore)
+              }
+
+              val norm = sum(denomScores) / (1 + noise.length) * vocabIndex.size
+
+              ll += score
+              ll -= log(norm)
+
+              data.foreach { featI =>
+                data.foreach { featJ =>
+                  axpy(1d, matTheta(featJ,::).t, grad(featI,::).t)
+                }
+              }
+              denomScores zip (noise :+ data) foreach { case (dScore, dFeat) =>
+                dFeat.foreach { featI =>
+                  dFeat.foreach { featJ =>
+                    axpy(-dScore / norm, matTheta(featJ,::).t, grad(featI,::).t)
+                  }
+                }
+              }
+            }
+          }
+          (-ll, -grad.toDenseVector)
+        }
+      }
+    }
   }
 
   def makeObjectiveHierarchical: BatchDiffFunction[DenseVector[Double]] = {
 
     val featureIndex: Index[String] = getDisk('FeatureIndex)
-    val vocabIndex: Index[String] = getDisk('VocabIndex)
     val huffmanDict: HuffmanDict[Int] = get('HuffmanDict)
 
     new BatchDiffFunction[DenseVector[Double]] {
@@ -73,21 +156,13 @@ class TrainModel(noiseSamples: Int = 10) extends Stage {
 
                 ll += log(1 + exp(score))
                 axpy(sigmoid(-score), new FeatureVector(feats), thetaNode)
-
               }
-
             }
-
           }
-
           (-ll, -grad.toDenseVector)
-
         }
-
       }
-
     }
-
   }
 
   def makeObjectiveMonteCarlo: BatchDiffFunction[DenseVector[Double]] = {
@@ -165,7 +240,6 @@ class TrainModel(noiseSamples: Int = 10) extends Stage {
     }
   }
 
-  // TODO refactor out inner loop (shared with CD)
   def makeObjectiveNoiseContrastive: BatchDiffFunction[DenseVector[Double]] = {
 
     val featureIndex: Index[String] = getDisk('FeatureIndex)
@@ -206,10 +280,7 @@ class TrainModel(noiseSamples: Int = 10) extends Stage {
           }
           (-ll, -grad)
         }
-
       }
-
     }
-
   }
 }
