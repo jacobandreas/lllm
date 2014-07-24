@@ -6,7 +6,7 @@ import breeze.optimize.{DiffFunction, GradientTester, BatchDiffFunction}
 import breeze.linalg._
 import breeze.util.Index
 import breeze.features.FeatureVector
-import breeze.numerics.{sigmoid, log, exp}
+import breeze.numerics.{sigmoid, log, exp, log1p}
 import breeze.optimize.FirstOrderMinimizer.OptParams
 import lllm.features.HashingFeatureIndex
 import lllm.model.ObjectiveType._
@@ -280,7 +280,7 @@ class TrainModel(noiseSamples: Int = 10,
                 val pNoise = noise zip noiseProbs map { case (n, np) => sigmoid((theta dot new FeatureVector(n)) - log(noiseSamples * np)) }
 
                 ll += log(pData)
-                ll += sum(pNoise.map(x => log(1 - x)))
+                ll += sum(pNoise.map(x => log1p(-x)))
 
                 axpy(1 - pData, new FeatureVector(data), grad)
                 pNoise zip noise foreach { case (p, n) => axpy(-p, new FeatureVector(n), grad) }
