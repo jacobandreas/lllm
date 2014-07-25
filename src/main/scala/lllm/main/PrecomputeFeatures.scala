@@ -23,7 +23,7 @@ object PrecomputeFeatures extends Stage[LLLMParams] {
 
     val Featurizer = NGramFeaturizer(1, config.order, includeWordIdentityInFeature) +
       WordAndIndexFeaturizer(includeWordIdentityInFeature) +
-      ConstantFeaturizer()
+      ConstantFeaturizer(includeWordIdentityInFeature)
 
     val corpus = TextCorpusReader(config.trainPath)
     val featureCounts = task("counting features") { Counter(corpus.nGramIterator(config.order).flatMap { nGram => Featurizer(nGram).map((_,1)) }) }
