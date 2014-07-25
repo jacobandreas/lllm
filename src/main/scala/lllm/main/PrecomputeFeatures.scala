@@ -3,7 +3,7 @@ package lllm.main
 import breeze.stats.distributions.Uniform
 import igor.experiment.{Experiment, Stage}
 import erector.corpus.TextCorpusReader
-import lllm.features.{HashingFeatureIndex, ConstantFeaturizer, NGramFeaturizer, WordAndIndexFeaturizer}
+import lllm.features._
 import erector.util.text.toNGramIterable
 import breeze.linalg.{sum, Counter}
 import lllm.model.UnigramLanguageModel
@@ -21,28 +21,30 @@ object PrecomputeFeatures extends Stage[LLLMParams] {
 
     val includeWordIdentityInFeature = config.objectiveType != Hierarchical
 
-    val Featurizer = NGramFeaturizer(1, config.order, includeWordIdentityInFeature) +
-      WordAndIndexFeaturizer(includeWordIdentityInFeature) +
-      ConstantFeaturizer(includeWordIdentityInFeature)
+    val contextFeaturizer = NGramFeaturizer(2, config.order) + WordAndIndexFeaturizer() + ConstantFeaturizer()
+    val predictionFeaturizer = IdentityFeaturizer()
+    // we assume for now that the features that come out of predictionFeaturizer look _exactly like_ the keys in the
+    // vocabulary index below
+
+    val productFeaturizer = contextFeaturizer * predictionFeaturizer
 
     val corpus = TextCorpusReader(config.trainPath)
-    val featureCounts = task("counting features") { Counter(corpus.nGramIterator(config.order).flatMap { nGram => Featurizer(nGram).map((_,1)) }) }
-    val posFeats = task("building feature index") { Index(corpus.nGramFeatureIndexer(config.order, Featurizer).filter(featureCounts(_) > 5)) }
-    val feats = {
+    val contextFeatureCounts = Counter(corpus.nGramIterator(config.order).flatMap { nGram => contextFeaturizer(nGram).map((_,1)) })
+    val positiveFeatIndex = Index(corpus.nGramFeatureIndexer(config.order, contextFeaturizer).filter(contextFeatureCounts(_) > 5))
+    val featIndex =
       if (config.useHashing)
-        HashingFeatureIndex(posFeats)
+        HashingFeatureIndex(positiveFeatIndex)
       else
-        posFeats
-    }
+        positiveFeatIndex
 
-    experiment.putDisk('FeatureIndex, feats)
-    experiment.putDisk('Featurizer, Featurizer)
+    experiment.putDisk('ContextFeaturizer, contextFeaturizer)
+    experiment.putDisk('ContextFeatureIndex, featIndex)
+    experiment.putDisk('PredictionFeaturizer, predictionFeaturizer)
     experiment.putDisk('VocabIndex, corpus.vocabularyIndex)
 
-    val counts = Counter[String,Double]
-    corpus.nGramIterator(1).foreach { word => counts(word) += 1d }
+    val counts = Counter[String,Double](corpus.nGramIterator(1).map(_(0) -> 1d))
     val noiseDistribution = Multinomial[Counter[String,Double],String](counts)
-    //val normalizedCounts = counts / sum(counts)
+    val uniformDistribution = Multinomial[Counter[String,Double],String](Counter(counts.keySet.map(_ -> 1d)))
 
     if (config.objectiveType == Hierarchical) {
       val huffmanDict = task("building Huffman dictionary") {
@@ -61,34 +63,36 @@ object PrecomputeFeatures extends Stage[LLLMParams] {
       lineGroups.zipWithIndex.foreach { case (lines, group) =>
 
         task(s"batch $group") {
-          val (dataFeatures, dataProbs): (Seq[Array[Int]], Seq[Double]) = task("data") { lines.flatMap { line =>
-            line.split(" ").toIndexedSeq.nGrams(config.order).map { ngram =>
-              (Featurizer(ngram).flatMap(feats.indexOpt).toArray, unigramModel.prob(ngram))
-            }
-          }}.unzip
 
-          assert(lines.isTraversableAgain)
-          val wordIds: Seq[Int] = lines.flatMap { line =>
-            line.split(" ") map corpus.vocabularyIndex
-          }
+          val batchNGrams = lines.flatMap { line => line.split(" ").toIndexedSeq.nGrams(config.order) }
 
-          val (noiseFeatures, noiseProbs): (Seq[IndexedSeq[Array[Int]]], Seq[IndexedSeq[Double]]) = task("noise") { lines.flatMap { line =>
-            line.split(" ").toIndexedSeq.nGrams(config.order).map { ngram =>
-              val samples = if (config.objectiveType == NCE)
-                              // TODO(jda) this should be a uniform sample
-                              noiseDistribution.sample(config.noiseSamples)
-                            else
-                              noiseDistribution.sample(config.noiseSamples)
-              samples.map { sample =>
-                val noisedNGram = ngram.take(ngram.length - 1) :+ sample
-                (Featurizer(noisedNGram).flatMap(feats.indexOpt).toArray, unigramModel.prob(ngram))
-              }.unzip
-            }
-          }}.unzip
+          val contextFeatures = batchNGrams map { contextFeaturizer(_).flatMap(featIndex.indexOpt).toArray }
 
-          experiment.putDisk(Symbol(s"DataFeatures$group"), dataFeatures)
+          val (predictionFeatures, predictionProbs) = (batchNGrams map { ngram: IndexedSeq[String] =>
+            val prediction = ngram.last
+            val predFeats = predictionFeaturizer(ngram)
+            // for now we are assuming these are the same thing (see comment above)
+            assert(predFeats.size == 1 && predFeats.last == prediction)
+            (predFeats map corpus.vocabularyIndex, noiseDistribution.probabilityOf(prediction))
+          }).unzip
+
+          val (noiseFeatures, noiseProbs) = (batchNGrams map { ngram: IndexedSeq[String] =>
+            val samples = if (config.objectiveType == NCE)
+              noiseDistribution.sample(config.noiseSamples)
+            else
+              uniformDistribution.sample(config.noiseSamples)
+            (samples map { sample =>
+              val predFeats = predictionFeaturizer(IndexedSeq(sample))
+              (predFeats map corpus.vocabularyIndex, noiseDistribution.probabilityOf(sample))
+            }).unzip
+          }).unzip
+
+          val wordIds: Seq[Int] = batchNGrams map { ngram: IndexedSeq[String] => corpus.vocabularyIndex(ngram.last) }
+
+          experiment.putDisk(Symbol(s"ContextFeatures$group"), contextFeatures)
+          experiment.putDisk(Symbol(s"PredictionFeatures$group"), predictionFeatures)
           experiment.putDisk(Symbol(s"NoiseFeatures$group"), noiseFeatures)
-          experiment.putDisk(Symbol(s"DataProbs$group"), dataProbs)
+          experiment.putDisk(Symbol(s"PredictionProbs$group"), predictionProbs)
           experiment.putDisk(Symbol(s"NoiseProbs$group"), noiseProbs)
           experiment.putDisk(Symbol(s"WordIds$group"), wordIds)
         }
