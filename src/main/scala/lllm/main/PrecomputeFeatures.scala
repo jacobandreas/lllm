@@ -1,7 +1,7 @@
 package lllm.main
 
 import breeze.stats.distributions.Uniform
-import igor.experiment.{Experiment, Stage}
+import igor.experiment.{ResultCache, Experiment, Stage}
 import erector.corpus.TextCorpusReader
 import lllm.features._
 import erector.util.text.toNGramIterable
@@ -17,7 +17,7 @@ import lllm.model.ObjectiveType._
  */
 object PrecomputeFeatures extends Stage[LLLMParams] {
 
-  override def run(config: LLLMParams, experiment: Experiment[LLLMParams]): Unit = {
+  override def run(config: LLLMParams, cache: ResultCache): Unit = {
 
     val includeWordIdentityInFeature = config.objectiveType != Hierarchical
 
@@ -37,14 +37,18 @@ object PrecomputeFeatures extends Stage[LLLMParams] {
       else
         positiveFeatIndex
 
-    experiment.putDisk('ContextFeaturizer, contextFeaturizer)
-    experiment.putDisk('ContextFeatureIndex, featIndex)
-    experiment.putDisk('PredictionFeaturizer, predictionFeaturizer)
-    experiment.putDisk('VocabIndex, corpus.vocabularyIndex)
+    cache.putDisk('ContextFeaturizer, contextFeaturizer)
+    cache.putDisk('ContextFeatureIndex, featIndex)
+    cache.putDisk('PredictionFeaturizer, predictionFeaturizer)
+    cache.putDisk('VocabIndex, corpus.vocabularyIndex)
 
     val counts = Counter[String,Double](corpus.nGramIterator(1).map(_(0) -> 1d))
     val noiseDistribution = Multinomial[Counter[String,Double],String](counts)
     val uniformDistribution = Multinomial[Counter[String,Double],String](Counter(counts.keySet.map(_ -> 1d)))
+    val samplingDistribution = if (config.objectiveType == NCE)
+      noiseDistribution
+    else
+      uniformDistribution
 
     if (config.objectiveType == Hierarchical) {
       val huffmanDict = task("building Huffman dictionary") {
@@ -52,11 +56,11 @@ object PrecomputeFeatures extends Stage[LLLMParams] {
         val intCounts = counts.keysIterator.map { key => (corpus.vocabularyIndex(key), counts(key))}.toIterable
         HuffmanDict.fromCounts(intCounts)
       }
-      experiment.putDisk('HuffmanDict, huffmanDict)
+      cache.putDisk('HuffmanDict, huffmanDict)
     }
 
     val unigramModel = new UnigramLanguageModel(counts)
-    experiment.putDisk('UnigramModel, unigramModel)
+    cache.putDisk('UnigramModel, unigramModel)
 
     task("caching features") {
       val lineGroups = corpus.lineGroupIterator(config.featureGroupSize)
@@ -73,32 +77,29 @@ object PrecomputeFeatures extends Stage[LLLMParams] {
             val predFeats = predictionFeaturizer(ngram)
             // for now we are assuming these are the same thing (see comment above)
             assert(predFeats.size == 1 && predFeats.last == prediction)
-            (predFeats map corpus.vocabularyIndex, noiseDistribution.probabilityOf(prediction))
+            (predFeats map corpus.vocabularyIndex, samplingDistribution.probabilityOf(prediction))
           }).unzip
 
           val (noiseFeatures, noiseProbs) = (batchNGrams map { ngram: IndexedSeq[String] =>
-            val samples = if (config.objectiveType == NCE)
-              noiseDistribution.sample(config.noiseSamples)
-            else
-              uniformDistribution.sample(config.noiseSamples)
+            val samples = samplingDistribution.sample(config.noiseSamples)
             (samples map { sample =>
               val predFeats = predictionFeaturizer(IndexedSeq(sample))
-              (predFeats map corpus.vocabularyIndex, noiseDistribution.probabilityOf(sample))
+              (predFeats map corpus.vocabularyIndex, samplingDistribution.probabilityOf(sample))
             }).unzip
           }).unzip
 
           val wordIds: Seq[Int] = batchNGrams map { ngram: IndexedSeq[String] => corpus.vocabularyIndex(ngram.last) }
 
-          experiment.putDisk(Symbol(s"ContextFeatures$group"), contextFeatures)
-          experiment.putDisk(Symbol(s"PredictionFeatures$group"), predictionFeatures)
-          experiment.putDisk(Symbol(s"NoiseFeatures$group"), noiseFeatures)
-          experiment.putDisk(Symbol(s"PredictionProbs$group"), predictionProbs)
-          experiment.putDisk(Symbol(s"NoiseProbs$group"), noiseProbs)
-          experiment.putDisk(Symbol(s"WordIds$group"), wordIds)
+          cache.putDisk(Symbol(s"ContextFeatures$group"), contextFeatures)
+          cache.putDisk(Symbol(s"PredictionFeatures$group"), predictionFeatures)
+          cache.putDisk(Symbol(s"NoiseFeatures$group"), noiseFeatures)
+          cache.putDisk(Symbol(s"PredictionProbs$group"), predictionProbs)
+          cache.putDisk(Symbol(s"NoiseProbs$group"), noiseProbs)
+          cache.putDisk(Symbol(s"WordIds$group"), wordIds)
         }
       }
     }
 
-    experiment.putDisk('NLineGroups, Int.box(corpus.lineGroupIterator(config.featureGroupSize).length))
+    cache.putDisk('NLineGroups, Int.box(corpus.lineGroupIterator(config.featureGroupSize).length))
   }
 }

@@ -1,7 +1,7 @@
 package lllm.main
 
 import breeze.config.ArgumentParser
-import igor.experiment.{Stages,Experiment}
+import igor.experiment.Experiment
 import igor.config.Configuration
 import lllm.model.ObjectiveType._
 
@@ -20,14 +20,9 @@ case class LLLMParams(
   rank: Int = 20
 )
 
-object LLLMExperiment extends Stages[LLLMParams] {
+object LLLMExperiment extends Experiment[LLLMParams] {
 
   protected val paramManifest = manifest[LLLMParams]
-
-  def run(exp: Experiment[LLLMParams]) {
-    exp.stage(PrecomputeFeatures)
-    exp.stage(TrainModel)
-    exp.stage(Evaluate)
-  }
+  val stages = Seq(PrecomputeFeatures, TrainModel, Evaluate)
 
 }
