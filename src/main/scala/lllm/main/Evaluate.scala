@@ -1,6 +1,6 @@
 package lllm.main
 
-import igor.experiment.Stage
+import igor.experiment.{Experiment, Stage}
 import lllm.model.{LanguageModel, LogLinearLanguageModel}
 import breeze.linalg.{softmax, DenseVector}
 import erector.corpus.TextCorpusReader
@@ -9,16 +9,15 @@ import breeze.numerics.{exp, log2, log}
 /**
  * @author jda
  */
-class Evaluate(val order: Int = 3,
-               val testPath: String) extends Stage {
+object Evaluate extends Stage[LLLMParams] {
 
-  override def run(): Unit = {
-    val model: LogLinearLanguageModel = get('Model)
+  override def run(config: LLLMParams, experiment: Experiment[LLLMParams]): Unit = {
+    val model: LogLinearLanguageModel = experiment.get('Model)
     //val model: LanguageModel = get('UnigramModel)
-    val testCorpus = TextCorpusReader(testPath)
+    val testCorpus = TextCorpusReader(config.testPath)
     //logger.info(model.theta.toString)
-    val logProb = testCorpus.nGramIterator(order).foldLeft(0d) { (accum, ngram) => accum + model.logProb(ngram) }
-    val logPP = logProb / testCorpus.nGramIterator(order).length
+    val logProb = testCorpus.nGramIterator(config.order).foldLeft(0d) { (accum, ngram) => accum + model.logProb(ngram) }
+    val logPP = logProb / testCorpus.nGramIterator(config.order).length
     logger.info(exp(-logPP).toString)
   }
 

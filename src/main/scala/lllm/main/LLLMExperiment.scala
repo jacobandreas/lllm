@@ -1,21 +1,33 @@
 package lllm.main
 
-import igor.experiment.{Launcher, Experiment}
+import breeze.config.ArgumentParser
+import igor.experiment.{Stages,Experiment}
 import igor.config.Configuration
+import lllm.model.ObjectiveType._
 
 /**
  * @author jda
  */
-class LLLMExperiment(config: Configuration) extends Experiment(config) {
 
-  def runStages() {
-    stage[PrecomputeFeatures]
-    stage[TrainModel]
-    stage[Evaluate]
+case class LLLMParams(
+  trainPath: String,
+  testPath: String,
+  order: Int = 3,
+  objectiveType: ObjectiveType = LowRank,
+  featureGroupSize: Int = 1000,
+  useHashing: Boolean = false,
+  noiseSamples: Int = 10,
+  rank: Int = 20
+)
+
+object LLLMExperiment extends Stages[LLLMParams] {
+
+  protected val paramManifest = manifest[LLLMParams]
+
+  def run(exp: Experiment[LLLMParams]) {
+    exp.stage(PrecomputeFeatures)
+    exp.stage(TrainModel)
+    exp.stage(Evaluate)
   }
 
-}
-
-object LLLMExperiment extends Launcher {
-  override def buildExperiment(config: Configuration) = new LLLMExperiment(config)
 }

@@ -1,6 +1,6 @@
 package lllm.main
 
-import igor.experiment.Stage
+import igor.experiment.{Experiment, Stage}
 import breeze.optimize.FirstOrderMinimizer.OptParams
 import breeze.optimize.{DiffFunction, GradientTester, BatchDiffFunction}
 import breeze.linalg._
@@ -18,68 +18,70 @@ import lllm.util.HuffmanDict
 /**
  * @author jda
  */
-// TODO(jda): for erector: default params should be set centrally
-class TrainModel(noiseSamples: Int = 10,
-                 useHashing: Boolean = false,
-                 objectiveType: ObjectiveType = LowRank,
-                 rank: Int = 10) extends Stage {
+object TrainModel extends Stage[LLLMParams] {
 
-  override def run(): Unit = {
+  override def run(config: LLLMParams, experiment: Experiment[LLLMParams]): Unit = {
 
-    val featureIndex: Index[String] = getDisk('FeatureIndex)
+    implicit val _c = config
+    implicit val _e = experiment
+
+    val featureIndex: Index[String] = experiment.getDisk('FeatureIndex)
 
     val optimization = OptParams(useStochastic = true, batchSize = 5, maxIterations = 500)
 
-    val initTheta = objectiveType match {
+    val initTheta = config.objectiveType match {
       case Hierarchical =>
-        val huffmanDict: HuffmanDict[Int] = get('HuffmanDict)
+        val huffmanDict: HuffmanDict[Int] = experiment.get('HuffmanDict)
         DenseVector.zeros[Double](featureIndex.size * huffmanDict.prefixIndex.size)
-      case LowRank => DenseVector.rand[Double](featureIndex.size * rank)
+      case LowRank => DenseVector.rand[Double](featureIndex.size * config.rank)
       case _ => DenseVector.zeros[Double](featureIndex.size)
     }
 
     // TODO(jda) low rank is actually orthogonal to everything else---generalize later
-    val objective = objectiveType match {
+    val objective = config.objectiveType match {
       case Hierarchical => makeObjectiveHierarchical
       case CD => makeObjectiveMonteCarlo
       case NCE => makeObjectiveNoiseContrastive
       case LowRank => makeObjectiveLowRank
-      case _ => { assert(false); makeObjectiveMonteCarlo }
+      case _ => assert(false); makeObjectiveMonteCarlo
     }
 
     //GradientTester.test(objective, initTheta, toString = (x: Int) => x.toString, randFraction = 1)
     val optTheta = optimization.minimize(objective, initTheta)
-    put('Model, new LogLinearLanguageModel(get('Featurizer), get('FeatureIndex), get('VocabIndex), optTheta))
+    experiment.put('Model, new LogLinearLanguageModel(experiment.get('Featurizer),
+                                                      experiment.get('FeatureIndex),
+                                                      experiment.get('VocabIndex),
+                                                      optTheta))
 
   }
 
   // TODO(jda) refactor inner loop out of all of the following
 
-  def makeObjectiveLowRank: BatchDiffFunction[DenseVector[Double]] = {
+  def makeObjectiveLowRank(implicit config: LLLMParams, experiment: Experiment[LLLMParams]): BatchDiffFunction[DenseVector[Double]] = {
 
-    val featureIndex: Index[String] = getDisk('FeatureIndex)
-    val vocabIndex: Index[String] = getDisk('VocabIndex)
+    val featureIndex: Index[String] = experiment.getDisk('FeatureIndex)
+    val vocabIndex: Index[String] = experiment.getDisk('VocabIndex)
 
     new BatchDiffFunction[DenseVector[Double]] {
 
-      override def fullRange: IndexedSeq[Int] = 0 until get('NLineGroups)
+      override def fullRange: IndexedSeq[Int] = 0 until experiment.get('NLineGroups)
 
       override def calculate(theta: DenseVector[Double], batch: IndexedSeq[Int]): (Double, DenseVector[Double]) = {
 
-        val matTheta = theta.asDenseMatrix.reshape(featureIndex.size, rank)
+        val matTheta = theta.asDenseMatrix.reshape(featureIndex.size, config.rank)
         // would be nice to precompute this, but we can't fit it in memory
         // val dots = matTheta * matTheta.t
 
         task("calculating") {
 
-          val grad = DenseMatrix.zeros[Double](featureIndex.size, rank)
+          val grad = DenseMatrix.zeros[Double](featureIndex.size, config.rank)
           var ll = 0d
 
           logger.info(s"batch: $batch")
 
           batch.foreach { batchIndex =>
-            val batchDataSamples: Seq[Array[Int]] = getDisk(Symbol(s"DataFeatures$batchIndex"))
-            val batchNoiseSamples: Seq[IndexedSeq[Array[Int]]] = getDisk(Symbol(s"NoiseFeatures$batchIndex"))
+            val batchDataSamples: Seq[Array[Int]] = experiment.getDisk(Symbol(s"DataFeatures$batchIndex"))
+            val batchNoiseSamples: Seq[IndexedSeq[Array[Int]]] = experiment.getDisk(Symbol(s"NoiseFeatures$batchIndex"))
 
             batchDataSamples zip batchNoiseSamples foreach { case (data, noise) =>
 
@@ -128,14 +130,14 @@ class TrainModel(noiseSamples: Int = 10,
     }
   }
 
-  def makeObjectiveHierarchical: BatchDiffFunction[DenseVector[Double]] = {
+  def makeObjectiveHierarchical(implicit config: LLLMParams, experiment: Experiment[LLLMParams]): BatchDiffFunction[DenseVector[Double]] = {
 
-    val featureIndex: Index[String] = getDisk('FeatureIndex)
-    val huffmanDict: HuffmanDict[Int] = get('HuffmanDict)
+    val featureIndex: Index[String] = experiment.getDisk('FeatureIndex)
+    val huffmanDict: HuffmanDict[Int] = experiment.get('HuffmanDict)
 
     new BatchDiffFunction[DenseVector[Double]] {
 
-      override def fullRange: IndexedSeq[Int] = 0 until get('NLineGroups)
+      override def fullRange: IndexedSeq[Int] = 0 until experiment.get('NLineGroups)
 
       override def calculate(theta: DenseVector[Double], batch: IndexedSeq[Int]): (Double, DenseVector[Double]) = {
 
@@ -147,8 +149,8 @@ class TrainModel(noiseSamples: Int = 10,
           var ll = 0d
 
           batch.foreach { batchIndex =>
-            val batchDataSamples: Seq[Array[Int]] = getDisk(Symbol(s"DataFeatures$batchIndex"))
-            val batchWordIds: Seq[Int] = getDisk(Symbol(s"WordIds$batchIndex"))
+            val batchDataSamples: Seq[Array[Int]] = experiment.getDisk(Symbol(s"DataFeatures$batchIndex"))
+            val batchWordIds: Seq[Int] = experiment.getDisk(Symbol(s"WordIds$batchIndex"))
 
             batchDataSamples zip batchWordIds foreach { case (feats, word) =>
               val code = huffmanDict.dict.get(word).get
@@ -173,14 +175,14 @@ class TrainModel(noiseSamples: Int = 10,
     }
   }
 
-  def makeObjectiveMonteCarlo: BatchDiffFunction[DenseVector[Double]] = {
+  def makeObjectiveMonteCarlo(implicit config: LLLMParams, experiment: Experiment[LLLMParams]): BatchDiffFunction[DenseVector[Double]] = {
 
-    val featureIndex: Index[String] = getDisk('FeatureIndex)
-    val vocabIndex: Index[String] = getDisk('VocabIndex)
+    val featureIndex: Index[String] = experiment.getDisk('FeatureIndex)
+    val vocabIndex: Index[String] = experiment.getDisk('VocabIndex)
 
     new BatchDiffFunction[DenseVector[Double]] {
 
-      override def fullRange: IndexedSeq[Int] = 0 until get('NLineGroups)
+      override def fullRange: IndexedSeq[Int] = 0 until experiment.get('NLineGroups)
 
       override def calculate(theta: DenseVector[Double], batch: IndexedSeq[Int]): (Double, DenseVector[Double]) = {
 
@@ -192,8 +194,8 @@ class TrainModel(noiseSamples: Int = 10,
           logger.info(s"batch: $batch")
 
           batch.foreach { batchIndex =>
-            val batchDataSamples: Seq[Array[Int]] = getDisk(Symbol(s"DataFeatures$batchIndex"))
-            val batchNoiseSamples: Seq[IndexedSeq[Array[Int]]] = getDisk(Symbol(s"NoiseFeatures$batchIndex"))
+            val batchDataSamples: Seq[Array[Int]] = experiment.getDisk(Symbol(s"DataFeatures$batchIndex"))
+            val batchNoiseSamples: Seq[IndexedSeq[Array[Int]]] = experiment.getDisk(Symbol(s"NoiseFeatures$batchIndex"))
 
             batchDataSamples zip batchNoiseSamples foreach { case (data, noise) =>
 
@@ -248,15 +250,15 @@ class TrainModel(noiseSamples: Int = 10,
     }
   }
 
-  def makeObjectiveNoiseContrastive: BatchDiffFunction[DenseVector[Double]] = {
+  def makeObjectiveNoiseContrastive(implicit config: LLLMParams, experiment: Experiment[LLLMParams]): BatchDiffFunction[DenseVector[Double]] = {
 
-    val featureIndex: Index[String] = getDisk('FeatureIndex)
-    val vocabIndex: Index[String] = getDisk('VocabIndex)
-    val unigramModel: UnigramLanguageModel = getDisk('UnigramModel)
+    val featureIndex: Index[String] = experiment.getDisk('FeatureIndex)
+    val vocabIndex: Index[String] = experiment.getDisk('VocabIndex)
+    val unigramModel: UnigramLanguageModel = experiment.getDisk('UnigramModel)
 
     new BatchDiffFunction[DenseVector[Double]] {
 
-      override def fullRange: IndexedSeq[Int] = 0 until get('NLineGroups)
+      override def fullRange: IndexedSeq[Int] = 0 until experiment.get('NLineGroups)
 
       override def calculate(theta: DenseVector[Double], batch: IndexedSeq[Int]): (Double, DenseVector[Double]) = {
 
@@ -268,16 +270,16 @@ class TrainModel(noiseSamples: Int = 10,
           logger.info(s"batch: $batch")
 
           batch.foreach { batchIndex =>
-            val batchDataSamples: Seq[Array[Int]] = getDisk(Symbol(s"DataFeatures$batchIndex"))
-            val batchNoiseSamples: Seq[IndexedSeq[Array[Int]]] = getDisk(Symbol(s"NoiseFeatures$batchIndex"))
-            val batchDataProbs: Seq[Double] = getDisk(Symbol(s"DataProbs$batchIndex"))
-            val batchNoiseProbs: Seq[IndexedSeq[Double]] = getDisk(Symbol(s"NoiseProbs$batchIndex"))
+            val batchDataSamples: Seq[Array[Int]] = experiment.getDisk(Symbol(s"DataFeatures$batchIndex"))
+            val batchNoiseSamples: Seq[IndexedSeq[Array[Int]]] = experiment.getDisk(Symbol(s"NoiseFeatures$batchIndex"))
+            val batchDataProbs: Seq[Double] = experiment.getDisk(Symbol(s"DataProbs$batchIndex"))
+            val batchNoiseProbs: Seq[IndexedSeq[Double]] = experiment.getDisk(Symbol(s"NoiseProbs$batchIndex"))
 
             (batchDataSamples zip batchDataProbs) zip (batchNoiseSamples zip batchNoiseProbs) foreach {
               case ((data, dataProb), (noise, noiseProbs)) =>
 
-                val pData = sigmoid((theta dot new FeatureVector(data)) - log(noiseSamples * dataProb))
-                val pNoise = noise zip noiseProbs map { case (n, np) => sigmoid((theta dot new FeatureVector(n)) - log(noiseSamples * np)) }
+                val pData = sigmoid((theta dot new FeatureVector(data)) - log(config.noiseSamples * dataProb))
+                val pNoise = noise zip noiseProbs map { case (n, np) => sigmoid((theta dot new FeatureVector(n)) - log(config.noiseSamples * np)) }
 
                 ll += log(pData)
                 ll += sum(pNoise.map(x => log1p(-x)))
