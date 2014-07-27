@@ -1,18 +1,14 @@
 package lllm.main
 
-import igor.experiment.{ResultCache, Experiment, Stage}
-import breeze.optimize.FirstOrderMinimizer.OptParams
-import breeze.optimize.{DiffFunction, GradientTester, BatchDiffFunction}
-import breeze.linalg._
-import breeze.util.Index
 import breeze.features.FeatureVector
-import breeze.numerics.{sigmoid, log, exp, log1p}
+import breeze.linalg._
+import breeze.numerics.{exp, log, log1p, sigmoid}
+import breeze.optimize.BatchDiffFunction
 import breeze.optimize.FirstOrderMinimizer.OptParams
-import lllm.features.HashingFeatureIndex
+import breeze.util.Index
+import igor.experiment.{ResultCache, Stage}
 import lllm.model.ObjectiveType._
-import lllm.model.{UnigramLanguageModel, LogLinearLanguageModel}
-import scala.collection.mutable.ArrayBuffer
-import scala.collection.mutable
+import lllm.model.{LogLinearLanguageModel, UnigramLanguageModel}
 import lllm.util.HuffmanDict
 
 /**
@@ -25,7 +21,7 @@ object TrainModel extends Stage[LLLMParams] {
     implicit val _c = config
     implicit val _r = cache
 
-    val featureIndex: Index[String] = cache.getDisk('FeatureIndex)
+    val featureIndex:CrossProductIndex = cache.getDisk('CrossIndex)
 
     val optimization = OptParams(useStochastic = true, batchSize = 5, maxIterations = 500)
 
@@ -48,10 +44,10 @@ object TrainModel extends Stage[LLLMParams] {
 
     //GradientTester.test(objective, initTheta, toString = (x: Int) => x.toString, randFraction = 1)
     val optTheta = optimization.minimize(objective, initTheta)
-    cache.put('Model, new LogLinearLanguageModel(cache.get('Featurizer),
-                                                 cache.get('FeatureIndex),
-                                                 cache.get('VocabIndex),
-                                                 optTheta))
+    cache.put('Model, new LogLinearLanguageModel(cache.get('PredictionFeaturizer),
+      cache.get('ContextFeaturizer),
+      cache.getDisk('CrossIndex),
+      optTheta))
 
   }
 
@@ -59,7 +55,7 @@ object TrainModel extends Stage[LLLMParams] {
 
   def makeObjectiveLowRank(implicit config: LLLMParams, cache: ResultCache): BatchDiffFunction[DenseVector[Double]] = {
 
-    val featureIndex: Index[String] = cache.getDisk('FeatureIndex)
+    val featureIndex: Index[String] = cache.getDisk('CrossIndex)
     val vocabIndex: Index[String] = cache.getDisk('VocabIndex)
 
     new BatchDiffFunction[DenseVector[Double]] {
@@ -80,7 +76,7 @@ object TrainModel extends Stage[LLLMParams] {
           logger.info(s"batch: $batch")
 
           batch.foreach { batchIndex =>
-            val batchDataSamples: Seq[Array[Int]] = cache.getDisk(Symbol(s"DataFeatures$batchIndex"))
+            val batchDataSamples: Seq[Array[Int]] = cache.getDisk(Symbol(s"PredictionFeatures$batchIndex"))
             val batchNoiseSamples: Seq[IndexedSeq[Array[Int]]] = cache.getDisk(Symbol(s"NoiseFeatures$batchIndex"))
 
             batchDataSamples zip batchNoiseSamples foreach { case (data, noise) =>
@@ -132,7 +128,7 @@ object TrainModel extends Stage[LLLMParams] {
 
   def makeObjectiveHierarchical(implicit config: LLLMParams, cache: ResultCache): BatchDiffFunction[DenseVector[Double]] = {
 
-    val featureIndex: Index[String] = cache.getDisk('FeatureIndex)
+    val featureIndex: Index[String] = cache.getDisk('CrossIndex)
     val huffmanDict: HuffmanDict[Int] = cache.get('HuffmanDict)
 
     new BatchDiffFunction[DenseVector[Double]] {
@@ -149,7 +145,7 @@ object TrainModel extends Stage[LLLMParams] {
           var ll = 0d
 
           batch.foreach { batchIndex =>
-            val batchDataSamples: Seq[Array[Int]] = cache.getDisk(Symbol(s"DataFeatures$batchIndex"))
+            val batchDataSamples: Seq[Array[Int]] = cache.getDisk(Symbol(s"PredictionFeatures$batchIndex"))
             val batchWordIds: Seq[Int] = cache.getDisk(Symbol(s"WordIds$batchIndex"))
 
             batchDataSamples zip batchWordIds foreach { case (feats, word) =>
@@ -177,7 +173,7 @@ object TrainModel extends Stage[LLLMParams] {
 
   def makeObjectiveMonteCarlo(implicit config: LLLMParams, cache: ResultCache): BatchDiffFunction[DenseVector[Double]] = {
 
-    val featureIndex: Index[String] = cache.getDisk('FeatureIndex)
+    val featureIndex: Index[String] = cache.getDisk('CrossIndex)
     val vocabIndex: Index[String] = cache.getDisk('VocabIndex)
 
     new BatchDiffFunction[DenseVector[Double]] {
@@ -194,7 +190,7 @@ object TrainModel extends Stage[LLLMParams] {
           logger.info(s"batch: $batch")
 
           batch.foreach { batchIndex =>
-            val batchDataSamples: Seq[Array[Int]] = cache.getDisk(Symbol(s"DataFeatures$batchIndex"))
+            val batchDataSamples: Seq[Array[Int]] = cache.getDisk(Symbol(s"PredictionFeatures$batchIndex"))
             val batchNoiseSamples: Seq[IndexedSeq[Array[Int]]] = cache.getDisk(Symbol(s"NoiseFeatures$batchIndex"))
 
             batchDataSamples zip batchNoiseSamples foreach { case (data, noise) =>
@@ -252,7 +248,7 @@ object TrainModel extends Stage[LLLMParams] {
 
   def makeObjectiveNoiseContrastive(implicit config: LLLMParams, cache: ResultCache): BatchDiffFunction[DenseVector[Double]] = {
 
-    val featureIndex: Index[String] = cache.getDisk('FeatureIndex)
+    val featureIndex: Index[String] = cache.getDisk('CrossIndex)
     val vocabIndex: Index[String] = cache.getDisk('VocabIndex)
     val unigramModel: UnigramLanguageModel = cache.getDisk('UnigramModel)
 
@@ -270,12 +266,12 @@ object TrainModel extends Stage[LLLMParams] {
           logger.info(s"batch: $batch")
 
           batch.foreach { batchIndex =>
-            val batchDataSamples: Seq[Array[Int]] = cache.getDisk(Symbol(s"DataFeatures$batchIndex"))
+            val batchDataSamples: Seq[Array[Int]] = cache.getDisk(Symbol(s"PredictionFeatures$batchIndex"))
             val batchNoiseSamples: Seq[IndexedSeq[Array[Int]]] = cache.getDisk(Symbol(s"NoiseFeatures$batchIndex"))
-            val batchDataProbs: Seq[Double] = cache.getDisk(Symbol(s"DataProbs$batchIndex"))
+            val batchPredictionProbs: Seq[Double] = cache.getDisk(Symbol(s"PredictionProbs$batchIndex"))
             val batchNoiseProbs: Seq[IndexedSeq[Double]] = cache.getDisk(Symbol(s"NoiseProbs$batchIndex"))
 
-            (batchDataSamples zip batchDataProbs) zip (batchNoiseSamples zip batchNoiseProbs) foreach {
+            (batchDataSamples zip batchPredictionProbs) zip (batchNoiseSamples zip batchNoiseProbs) foreach {
               case ((data, dataProb), (noise, noiseProbs)) =>
 
                 val pData = sigmoid((theta dot new FeatureVector(data)) - log(config.noiseSamples * dataProb))
