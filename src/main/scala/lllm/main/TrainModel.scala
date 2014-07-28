@@ -23,8 +23,6 @@ object TrainModel extends Stage[LLLMParams] {
 
     val featureIndex:CrossProductIndex = cache.getDisk('CrossIndex)
 
-    val optimization = OptParams(useStochastic = true, batchSize = 5, maxIterations = 500)
-
     val initTheta = config.objectiveType match {
       case Hierarchical =>
         val huffmanDict: HuffmanDict[Int] = cache.get('HuffmanDict)
@@ -43,7 +41,7 @@ object TrainModel extends Stage[LLLMParams] {
     }
 
     //GradientTester.test(objective, initTheta, toString = (x: Int) => x.toString, randFraction = 1)
-    val optTheta = optimization.minimize(objective, initTheta)
+    val optTheta = config.optParams.minimize(objective, initTheta)
     cache.put('Model, new LogLinearLanguageModel(cache.get('PredictionFeaturizer),
       cache.get('ContextFeaturizer),
       cache.getDisk('CrossIndex),

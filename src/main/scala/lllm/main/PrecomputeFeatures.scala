@@ -9,7 +9,8 @@ import igor.experiment.{ResultCache, Stage}
 import lllm.features._
 import lllm.model.ObjectiveType._
 import lllm.model.UnigramLanguageModel
-import lllm.util.HuffmanDict
+import lllm.util.{PreprocessingIndex, RareWordPreprocessor, HuffmanDict}
+import lllm.util.RichClasses.IndexWithOOV
 
 /**
  * @author jda
@@ -18,14 +19,16 @@ object PrecomputeFeatures extends Stage[LLLMParams] {
 
   override def run(config: LLLMParams, cache: ResultCache): Unit = {
 
+    val corpus = TextCorpusReader(config.trainPath).dummy(1000)
+    val counts = Counter[String,Double](corpus.nGramIterator(1).map(_(0) -> 1d))
+    val wordPreprocessor = RareWordPreprocessor(counts, config.rareWordThreshold, UnknownWordToken)
+    val vocabIndex = PreprocessingIndex(wordPreprocessor)(corpus.vocabularyIndex)
+
     val contextFeaturizer = NGramFeaturizer(2, config.order) + WordAndIndexFeaturizer() + ConstantFeaturizer()
-    val predictionFeaturizer = IdentityFeaturizer()
+    val predictionFeaturizer = IdentityFeaturizer(wordPreprocessor)
     // we assume for now that the features that come out of predictionFeaturizer look _exactly like_ the keys in the
-    // vocabulary index below
+    // vocabulary index above
 
-    val productFeaturizer = contextFeaturizer * predictionFeaturizer
-
-    val corpus = TextCorpusReader(config.trainPath)
     val contextFeatureCounts = Counter(corpus.nGramIterator(config.order).flatMap { nGram => contextFeaturizer(nGram).map((_,1)) })
     val positiveFeatIndex = Index(corpus.nGramFeatureIndexer(config.order, contextFeaturizer).filter(contextFeatureCounts(_) > 5))
     val featIndex = positiveFeatIndex
@@ -33,11 +36,10 @@ object PrecomputeFeatures extends Stage[LLLMParams] {
     cache.putDisk('ContextFeaturizer, contextFeaturizer)
     cache.putDisk('ContextFeatureIndex, featIndex)
     cache.putDisk('PredictionFeaturizer, predictionFeaturizer)
-    cache.putDisk('VocabIndex, corpus.vocabularyIndex)
+    cache.putDisk('VocabIndex, vocabIndex)
 
-    val cpIndexBuilder = new CrossProductIndex.Builder(corpus.vocabularyIndex, featIndex, hashFeatures = if(config.useHashing) 1.0 else 0.0)
+    val cpIndexBuilder = new CrossProductIndex.Builder(vocabIndex, featIndex, hashFeatures = if(config.useHashing) 1.0 else 0.0)
 
-    val counts = Counter[String,Double](corpus.nGramIterator(1).map(_(0) -> 1d))
     val noiseDistribution = Multinomial[Counter[String,Double],String](counts)
     val uniformDistribution = Multinomial[Counter[String,Double],String](Counter(counts.keySet.map(_ -> 1d)))
     val samplingDistribution = if (config.objectiveType == NCE)
@@ -68,15 +70,15 @@ object PrecomputeFeatures extends Stage[LLLMParams] {
           val contextFeatures = batchNGrams map { contextFeaturizer(_).flatMap(featIndex.indexOpt).toArray }
 
           val (predictionFeatures, predictionProbs) = (batchNGrams zip contextFeatures map { case (ngram, context) =>
-            val prediction = ngram.last
+            val prediction = wordPreprocessor(ngram.last)
             val predFeats = predictionFeaturizer(ngram)
             // for now we are assuming these are the same thing (see comment above)
             assert(predFeats.size == 1 && predFeats.last == prediction)
-            val crossFeats = cpIndexBuilder.add((predFeats map corpus.vocabularyIndex).toArray, context)
+            val crossFeats = cpIndexBuilder.add((predFeats map vocabIndex).toArray, context)
             (crossFeats, samplingDistribution.probabilityOf(prediction))
           }).unzip
 
-          val wordIds: Seq[Int] = batchNGrams map { ngram: IndexedSeq[String] => corpus.vocabularyIndex(ngram.last) }
+          val wordIds: Seq[Int] = batchNGrams map { ngram: IndexedSeq[String] => vocabIndex(ngram.last) }
 
           cache.putDisk(Symbol(s"ContextFeatures$group"), contextFeatures)
           cache.putDisk(Symbol(s"PredictionFeatures$group"), predictionFeatures)
@@ -103,13 +105,14 @@ object PrecomputeFeatures extends Stage[LLLMParams] {
 
           val (noiseFeatures, noiseProbs) = (batchNGrams zip contextFeatures map { case (ngram, context) =>
             val samples = samplingDistribution.sample(config.noiseSamples)
-            (samples map { sample =>
+            (samples map { preSample =>
+              val sample = wordPreprocessor(preSample)
               val predFeats = predictionFeaturizer(IndexedSeq(sample))
               val crossFeats =
                 if (buildGuessFeatures)
-                  cpIndexBuilder.add((predFeats map corpus.vocabularyIndex).toArray, context)
+                  cpIndexBuilder.add((predFeats map vocabIndex).toArray, context)
                 else
-                  cpIndex.crossProduct((predFeats map corpus.vocabularyIndex).toArray, context)
+                  cpIndex.crossProduct((predFeats map vocabIndex).toArray, context)
               (crossFeats, samplingDistribution.probabilityOf(sample))
             }).unzip
           }).unzip
@@ -123,7 +126,6 @@ object PrecomputeFeatures extends Stage[LLLMParams] {
     }
 
     cache.putDisk('CrossIndex, cpIndex)
-
     cache.putDisk('NLineGroups, Int.box(corpus.lineGroupIterator(config.featureGroupSize).length))
   }
 }
