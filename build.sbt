@@ -2,6 +2,14 @@ name := "lllm"
 
 version := "1.0"
     
+resolvers ++= Seq(
+    Resolver.mavenLocal,
+    Resolver.sonatypeRepo("snapshots"),
+    Resolver.sonatypeRepo("releases"),
+    Resolver.sonatypeRepo("public"),
+    Resolver.typesafeRepo("releases")
+)
+
 libraryDependencies ++= Seq(
   "edu.berkeley.nlp.cs" %% "igor" % "0.1-SNAPSHOT",
   "edu.berkeley.nlp.cs" %% "erector" % "0.1-SNAPSHOT",

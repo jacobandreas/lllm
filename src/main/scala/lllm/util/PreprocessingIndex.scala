@@ -11,7 +11,7 @@ case class PreprocessingIndex[T](preprocess: T => T)(source: Iterable[T]) extend
 
   override def apply(t: T): Int = backingIndex(preprocess(t))
 
-  override def unapply(i: Int): Option[T] = ???
+  override def unapply(i: Int): Option[T] = backingIndex.unapply(i)
 
   override def pairs: Iterator[(T, Int)] = backingIndex.pairs
 

@@ -2,13 +2,13 @@ package lllm.main
 
 import breeze.linalg.Counter
 import breeze.stats.distributions.Multinomial
+//import lllm.util.Multinomial
 import breeze.util.Index
 import erector.corpus.TextCorpusReader
 import erector.util.text.toNGramIterable
 import igor.experiment.{ResultCache, Stage}
 import lllm.features._
-import lllm.model.ObjectiveType._
-import lllm.model.UnigramLanguageModel
+import lllm.model.{NCE, Hierarchical, NGramLanguageModel}
 import lllm.util.{PreprocessingIndex, RareWordPreprocessor, HuffmanDict}
 import lllm.util.RichClasses.IndexWithOOV
 
@@ -19,12 +19,14 @@ object PrecomputeFeatures extends Stage[LLLMParams] {
 
   override def run(config: LLLMParams, cache: ResultCache): Unit = {
 
-    val corpus = TextCorpusReader(config.trainPath).dummy(1000)
-    val counts = Counter[String,Double](corpus.nGramIterator(1).map(_(0) -> 1d))
-    val wordPreprocessor = RareWordPreprocessor(counts, config.rareWordThreshold, UnknownWordToken)
+    val corpus = TextCorpusReader(config.trainPath)
+    val preCounts = Counter[String,Double](corpus.nGramIterator(1).map(_(0) -> 1d))
+    val wordPreprocessor = RareWordPreprocessor(preCounts, config.rareWordThreshold, UnknownWordToken)
     val vocabIndex = PreprocessingIndex(wordPreprocessor)(corpus.vocabularyIndex)
+    val counts = Counter[String,Double](corpus.nGramIterator(1).map(ngram => wordPreprocessor(ngram(0)) -> 1d))
 
     val contextFeaturizer = NGramFeaturizer(2, config.order) + WordAndIndexFeaturizer() + ConstantFeaturizer()
+    //val contextFeaturizer = NGramFeaturizer(2, config.order) + ConstantFeaturizer()
     val predictionFeaturizer = IdentityFeaturizer(wordPreprocessor)
     // we assume for now that the features that come out of predictionFeaturizer look _exactly like_ the keys in the
     // vocabulary index above
@@ -40,14 +42,14 @@ object PrecomputeFeatures extends Stage[LLLMParams] {
 
     val cpIndexBuilder = new CrossProductIndex.Builder(vocabIndex, featIndex, hashFeatures = if(config.useHashing) 1.0 else 0.0)
 
-    val noiseDistribution = Multinomial[Counter[String,Double],String](counts)
-    val uniformDistribution = Multinomial[Counter[String,Double],String](Counter(counts.keySet.map(_ -> 1d)))
-    val samplingDistribution = if (config.objectiveType == NCE)
+    val noiseDistribution = Multinomial(counts)
+    val uniformDistribution = Multinomial(Counter(counts.keySet.map(_ -> 1d)))
+    val samplingDistribution = if (config.objective == NCE)
       noiseDistribution
     else
       uniformDistribution
 
-    if (config.objectiveType == Hierarchical) {
+    if (config.objective == Hierarchical) {
       val huffmanDict = task("building Huffman dictionary") {
         counts.keysIterator.foreach { key => corpus.vocabularyIndex(key)}
         val intCounts = counts.keysIterator.map { key => (corpus.vocabularyIndex(key), counts(key))}.toIterable
@@ -56,8 +58,9 @@ object PrecomputeFeatures extends Stage[LLLMParams] {
       cache.putDisk('HuffmanDict, huffmanDict)
     }
 
-    val unigramModel = new UnigramLanguageModel(counts)
-    cache.putDisk('UnigramModel, unigramModel)
+    val ngramCounts = Counter(corpus.nGramIterator(config.order).map(_.map(wordPreprocessor) -> 1d))
+    val ngramModel = new NGramLanguageModel(ngramCounts, wordPreprocessor)
+    cache.putDisk('NGramModel, ngramModel)
 
     task("caching gold features") {
       val lineGroups = corpus.lineGroupIterator(config.featureGroupSize)
@@ -75,7 +78,7 @@ object PrecomputeFeatures extends Stage[LLLMParams] {
             // for now we are assuming these are the same thing (see comment above)
             assert(predFeats.size == 1 && predFeats.last == prediction)
             val crossFeats = cpIndexBuilder.add((predFeats map vocabIndex).toArray, context)
-            (crossFeats, samplingDistribution.probabilityOf(prediction))
+            (crossFeats, samplingDistribution.logProbabilityOf(prediction))
           }).unzip
 
           val wordIds: Seq[Int] = batchNGrams map { ngram: IndexedSeq[String] => vocabIndex(ngram.last) }
@@ -113,12 +116,10 @@ object PrecomputeFeatures extends Stage[LLLMParams] {
                   cpIndexBuilder.add((predFeats map vocabIndex).toArray, context)
                 else
                   cpIndex.crossProduct((predFeats map vocabIndex).toArray, context)
-              (crossFeats, samplingDistribution.probabilityOf(sample))
+              (crossFeats, samplingDistribution.logProbabilityOf(sample))
             }).unzip
           }).unzip
 
-
-//          cache.putDisk(Symbol(s"ContextFeatures$group"), contextFeatures)
           cache.putDisk(Symbol(s"NoiseFeatures$group"), noiseFeatures)
           cache.putDisk(Symbol(s"NoiseProbs$group"), noiseProbs)
         }
