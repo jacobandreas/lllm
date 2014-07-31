@@ -9,7 +9,7 @@ import erector.util.text.toNGramIterable
 import igor.experiment.{ResultCache, Stage}
 import lllm.features._
 import lllm.model.{NCE, Hierarchical, NGramLanguageModel}
-import lllm.util.{PreprocessingIndex, RareWordPreprocessor, HuffmanDict}
+import lllm.util.{PreprocessingIndex, HuffmanDict}
 import lllm.util.RichClasses.IndexWithOOV
 
 /**
@@ -20,14 +20,19 @@ object PrecomputeFeatures extends Stage[LLLMParams] {
   override def run(config: LLLMParams, cache: ResultCache): Unit = {
 
     val corpus = TextCorpusReader(config.trainPath)
-    val preCounts = Counter[String,Double](corpus.nGramIterator(1).map(_(0) -> 1d))
-    val wordPreprocessor = RareWordPreprocessor(preCounts, config.rareWordThreshold, UnknownWordToken)
-    val vocabIndex = PreprocessingIndex(wordPreprocessor)(corpus.vocabularyIndex)
-    val counts = Counter[String,Double](corpus.nGramIterator(1).map(ngram => wordPreprocessor(ngram(0)) -> 1d))
+    val preCounts = Counter(corpus.nGramIterator(1).map(_(0) -> 1d))
+    //val wordPreprocessor = RareWordPreprocessor(preCounts, config.rareWordThreshold, UnknownWordToken)
+    val contextPreprocessor = FrequentSuffixPreprocessor(preCounts, config.rareSuffixThreshold, UnknownWordToken)
+    val predictionPreprocessor = RareWordPreprocessor(preCounts, config.rareWordThreshold, UnknownWordToken)
+    val vocabIndex = PreprocessingIndex(predictionPreprocessor)(corpus.vocabularyIndex)
+    val counts = Counter[String,Double](corpus.nGramIterator(1).map(ngram => predictionPreprocessor(ngram(0)) -> 1d))
 
-    val contextFeaturizer = NGramFeaturizer(2, config.order) + WordAndIndexFeaturizer() + ConstantFeaturizer()
+    val contextFeaturizer = contextPreprocessor before
+                            (NGramFeaturizer(2, config.order) +
+                            WordAndIndexFeaturizer() +
+                            ConstantFeaturizer())
     //val contextFeaturizer = NGramFeaturizer(2, config.order) + ConstantFeaturizer()
-    val predictionFeaturizer = IdentityFeaturizer(wordPreprocessor)
+    val predictionFeaturizer = predictionPreprocessor before IdentityFeaturizer()
     // we assume for now that the features that come out of predictionFeaturizer look _exactly like_ the keys in the
     // vocabulary index above
 
@@ -58,8 +63,11 @@ object PrecomputeFeatures extends Stage[LLLMParams] {
       cache.putDisk('HuffmanDict, huffmanDict)
     }
 
-    val ngramCounts = Counter(corpus.nGramIterator(config.order).map(_.map(wordPreprocessor) -> 1d))
-    val ngramModel = new NGramLanguageModel(ngramCounts, wordPreprocessor)
+    //val ngramCounts = Counter(corpus.nGramIterator(config.order).map(_.map(wordPreprocessor) -> 1d))
+    val ngramCounts = Counter(corpus.nGramIterator(config.order).map { ngram =>
+      (ngram.take(ngram.length - 1).map(contextPreprocessor) :+ predictionPreprocessor(ngram.last)) -> 1d
+    })
+    val ngramModel = new NGramLanguageModel(ngramCounts, contextPreprocessor, predictionPreprocessor)
     cache.putDisk('NGramModel, ngramModel)
 
     task("caching gold features") {
@@ -73,7 +81,7 @@ object PrecomputeFeatures extends Stage[LLLMParams] {
           val contextFeatures = batchNGrams map { contextFeaturizer(_).flatMap(featIndex.indexOpt).toArray }
 
           val (predictionFeatures, predictionProbs) = (batchNGrams zip contextFeatures map { case (ngram, context) =>
-            val prediction = wordPreprocessor(ngram.last)
+            val prediction = predictionPreprocessor(ngram.last)
             val predFeats = predictionFeaturizer(ngram)
             // for now we are assuming these are the same thing (see comment above)
             assert(predFeats.size == 1 && predFeats.last == prediction)
@@ -109,7 +117,7 @@ object PrecomputeFeatures extends Stage[LLLMParams] {
           val (noiseFeatures, noiseProbs) = (batchNGrams zip contextFeatures map { case (ngram, context) =>
             val samples = samplingDistribution.sample(config.noiseSamples)
             (samples map { preSample =>
-              val sample = wordPreprocessor(preSample)
+              val sample = predictionPreprocessor(preSample)
               val predFeats = predictionFeaturizer(IndexedSeq(sample))
               val crossFeats =
                 if (buildGuessFeatures)

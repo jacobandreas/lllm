@@ -17,7 +17,8 @@ case class LLLMParams(
   useHashing: Boolean = false,
   noiseSamples: Int = 10,
   rank: Int = 20,
-  rareWordThreshold: Int = 2,
+  rareWordThreshold: Int = 10,
+  rareSuffixThreshold: Int = 2,
   optParams: OptParams = OptParams(useStochastic = true, batchSize = 5, maxIterations = 100)
 
 )

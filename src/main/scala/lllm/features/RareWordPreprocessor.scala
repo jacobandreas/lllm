@@ -1,11 +1,11 @@
-package lllm.util
+package lllm.features
 
 import breeze.linalg.Counter
 
 /**
  * @author jda
  */
-case class RareWordPreprocessor(counts: Counter[String,Double], threshold: Double, oovStr: String) extends (String => String) {
+case class RareWordPreprocessor(counts: Counter[String,Double], threshold: Double, oovStr: String) extends WordPreprocessor {
 
   val known = Set(counts.toMap.flatMap { case (word, count) =>
     if (count <= threshold)

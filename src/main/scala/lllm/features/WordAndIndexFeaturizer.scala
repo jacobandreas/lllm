@@ -8,7 +8,7 @@ import breeze.linalg.SparseVector
 case class WordAndIndexFeaturizer() extends Featurizer {
 
   override def apply(arg: IndexedSeq[String]): Iterable[String] = {
-    arg.take(arg.length - 1).zipWithIndex.map { case (w, i) => s"SKIP__${w}_${i}"}
+    arg.take(arg.length - 2).zipWithIndex.map { case (w, i) => s"SKIP__${w}_${i}"}
   }
 
 }

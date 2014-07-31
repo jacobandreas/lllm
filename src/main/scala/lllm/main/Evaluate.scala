@@ -12,7 +12,7 @@ import breeze.numerics.{exp, log2, log}
 object Evaluate extends Stage[LLLMParams] {
 
   override def run(config: LLLMParams, cache: ResultCache): Unit = {
-    val model: LogLinearLanguageModel = cache.get('Model)
+    val model: LanguageModel = cache.get('NGramModel)//cache.get('Model)
     val testCorpus = TextCorpusReader(config.testPath)
     val logProb = testCorpus.nGramIterator(config.order).foldLeft(0d) { (accum, ngram) => accum + model.logProb(ngram) }
     val logPP = logProb / testCorpus.nGramIterator(config.order).length

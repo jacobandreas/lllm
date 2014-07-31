@@ -5,8 +5,8 @@ import breeze.util.Index
 /**
  * @author jda
  */
-case class IdentityFeaturizer(preprocessor: String => String) extends Featurizer {
+case class IdentityFeaturizer() extends Featurizer {
 
-  override def apply(arg: IndexedSeq[String]): Iterable[String] = Seq(preprocessor(arg.last))
+  override def apply(arg: IndexedSeq[String]): Iterable[String] = Seq(arg.last)
 
 }
