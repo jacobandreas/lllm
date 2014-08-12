@@ -1,6 +1,8 @@
 name := "lllm"
 
-version := "1.0"
+version := "0.1-SNAPSHOT"
+
+scalaVersion := "2.11.1"
     
 resolvers ++= Seq(
     Resolver.mavenLocal,
@@ -12,13 +14,14 @@ resolvers ++= Seq(
 
 libraryDependencies ++= Seq(
   "edu.berkeley.nlp.cs" %% "igor" % "0.1-SNAPSHOT",
-  "edu.berkeley.nlp.cs" %% "erector" % "0.1-SNAPSHOT",
-  "org.scalanlp" %% "breeze" % "0.9-SNAPSHOT",
-  "org.apache.logging.log4j" % "log4j-slf4j-impl" % "2.0-beta9",
-  "org.apache.logging.log4j" % "log4j-core" % "2.0-beta9",
-  "org.apache.logging.log4j" % "log4j-api" % "2.0-beta9"
+  "edu.berkeley.nlp.cs" %% "erector" % "0.1-SNAPSHOT"
+  //"org.scalanlp" %% "breeze" % "0.9",
+  //"com.typesafe.scala-logging" %% "scala-logging-slf4j" % "2.1.2",
+  //"org.apache.logging.log4j" % "log4j-slf4j-impl" % "2.0-beta9",
+  //"org.apache.logging.log4j" % "log4j-core" % "2.0-beta9",
+  //"org.apache.logging.log4j" % "log4j-api" % "2.0-beta9"
 )
 
-fork := true
+//fork := true
 
 javaOptions := Seq("-Xmx6g", "-Xrunhprof:cpu=samples,depth=12", "-Dlog4j.configurationFile=src/main/resources/log4j.xml")
