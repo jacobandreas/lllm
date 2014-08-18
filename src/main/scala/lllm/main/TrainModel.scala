@@ -21,17 +21,26 @@ object TrainModel extends Stage[LLLMParams] {
 
     val featureIndex: CrossProductIndex = cache.getDisk('CrossIndex)
 
-    // TODO(jda) low rank is actually orthogonal to everything else---generalize later
     val initTheta = DenseVector.zeros[Double](config.objective.numParams(featureIndex.size))
 
-    val optParams = OptParams(useStochastic = true, batchSize = 5, maxIterations = 100, regularization = 0.1)
+    val optParams = OptParams(useStochastic = true, batchSize = 5, maxIterations = 100, regularization = 1)
     val objective = makeObjective(config.objective)
     //GradientTester.test(objective, initTheta, toString = (x: Int) => x.toString)
     val optTheta = optParams.minimize(objective, initTheta)
-    cache.put('Model, new LogLinearLanguageModel(cache.get('PredictionFeaturizer),
-      cache.get('ContextFeaturizer),
-      cache.getDisk('CrossIndex),
-      optTheta))
+    val model =
+      if (config.objective == Hierarchical) {
+        new HierarchicalLanguageModel(cache.get('PredictionFeaturizer),
+                                      cache.get('ContextFeaturizer),
+                                      cache.get('CrossIndex),
+                                      cache.get('HuffmanDict),
+                                      optTheta)
+      } else {
+        new LogLinearLanguageModel(cache.get('PredictionFeaturizer),
+                                   cache.get('ContextFeaturizer),
+                                   cache.get('CrossIndex),
+                                   optTheta)
+      }
+    cache.put('Model, model)
 
   }
 

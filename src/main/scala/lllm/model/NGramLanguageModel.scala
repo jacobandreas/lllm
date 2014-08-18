@@ -11,7 +11,7 @@ class NGramLanguageModel(counts: Counter[IndexedSeq[String],Double],
                          contextPreprocessor: WordPreprocessor,
                          predictionPreprocessor: WordPreprocessor) extends LanguageModel with Serializable {
 
-  counts /= sum(counts)
+  // TODO(normalize)
 
   override def prob(ngram: IndexedSeq[String]): Double = {
     //val filtered = ngram map preprocessor
