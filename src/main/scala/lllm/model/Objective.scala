@@ -25,6 +25,7 @@ sealed trait Objective {
 
   def apply(theta: DenseVector[Double],
             batch: Int,
+            lines: Seq[String],
             featureIndex: Index[String])
            (implicit config: LLLMParams,
             cache: ResultCache): (Double, DenseVector[Double])
@@ -37,6 +38,7 @@ case object Exact extends Objective {
 
   override def apply(theta: DenseVector[Double],
                      batch: Int,
+                     batchLines: Seq[String],
                      featureIndex: Index[String])
                     (implicit config: LLLMParams,
                      cache: ResultCache): (Double, DenseVector[Double]) = {
@@ -86,6 +88,7 @@ case object CD extends Objective {
 
   override def apply(theta: DenseVector[Double],
             batch: Int,
+            batchLines: Seq[String],
             featureIndex: Index[String])
            (implicit config: LLLMParams,
             cache: ResultCache): (Double, DenseVector[Double]) = {
@@ -152,6 +155,7 @@ case object NCE extends Objective {
 
   override def apply(theta: DenseVector[Double],
                      batch: Int,
+                     batchLines: Seq[String],
                      featureIndex: Index[String])
                     (implicit config: LLLMParams,
                      cache: ResultCache): (Double, DenseVector[Double]) = {
@@ -211,6 +215,7 @@ case object Hierarchical extends Objective {
 
   override def apply(theta: DenseVector[Double],
                      batch: Int,
+                     batchLines: Seq[String],
                      featureIndex: Index[String])
                     (implicit config: LLLMParams,
                      cache: ResultCache): (Double, DenseVector[Double]) = {
@@ -229,12 +234,15 @@ case object Hierarchical extends Objective {
     val contextFeaturizer: Featurizer = cache.get('ContextFeaturizer)
     val featIndex: Index[Feature] = cache.get('FeatIndex)
     val vocabIndex: Index[String] = cache.get('VocabIndex)
-    val lines: Source = cache.readFile(Symbol(s"Lines$batch"))
-    val batchNGrams = PrecomputeFeatures.makeBatchNGrams(lines.reset().getLines().toIterable)
+    //val lines: Source = cache.readFile(Symbol(s"Lines$batch"))
+    //val batchNGrams = PrecomputeFeatures.makeBatchNGrams(lines.reset().getLines().toIterable)
+    val batchNGrams = PrecomputeFeatures.makeBatchNGrams(batchLines)
     val batchContextFeatures = PrecomputeFeatures.makeBatchContextFeatures(batchNGrams, contextFeaturizer, featIndex)
 
     (batchNGrams zip batchContextFeatures).foreach { case (ngram, contextFeatures) =>
       val wordId = vocabIndex(ngram.last)
+//      println(wordId)
+//      println(ngram.last)
       val code = huffmanDict.dict.get(wordId).get
       // force evaluation now
       code.tails.toArray.filter(_.nonEmpty).foreach { prefix =>
@@ -281,6 +289,7 @@ case object LowRank extends Objective {
 
   override def apply(vecTheta: DenseVector[Double],
                      batch: Int,
+                     batchLines: Seq[String],
                      featureIndex: Index[String])
                     (implicit config: LLLMParams,
                      cache: ResultCache): (Double, DenseVector[Double]) = {

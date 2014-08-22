@@ -1,3 +1,7 @@
+import AssemblyKeys._
+
+assemblySettings
+
 name := "lllm"
 
 version := "0.1-SNAPSHOT"
@@ -18,3 +22,4 @@ libraryDependencies ++= Seq(
 )
 
 javaOptions := Seq("-Xmx6g", "-Xrunhprof:cpu=samples,depth=12", "-Dlog4j.configurationFile=src/main/resources/log4j.xml")
+

@@ -39,7 +39,7 @@ object PrecomputeFeatures extends Stage[LLLMParams] {
 //      (NGramFeaturizer(2, config.order) +
 //       WordAndIndexFeaturizer() +
 //       ConstantFeaturizer())
-    val contextFeaturizer = contextPreprocessor before (NGramFeaturizer(2, config.order))
+    val contextFeaturizer = contextPreprocessor before (NGramFeaturizer(2, config.order) + WordAndIndexFeaturizer())
     //val contextFeaturizer = NGramFeaturizer(2, config.order) + ConstantFeaturizer()
     val predictionFeaturizer = predictionPreprocessor before IdentityFeaturizer()
     // we assume for now that the features that come out of predictionFeaturizer look _exactly like_ the keys in the
@@ -148,7 +148,7 @@ object PrecomputeFeatures extends Stage[LLLMParams] {
             cache.putDisk(Symbol(s"WordIds$group"), wordIds)
           } else {
             //cache.putDisk(Symbol(s"Lines$group"), lines)
-            cache.writeFile(Symbol(s"Lines$group"), lines.mkString("\n"))
+            //cache.writeFile(Symbol(s"Lines$group"), lines.mkString("\n"))
           }
         }
       }
@@ -194,6 +194,7 @@ object PrecomputeFeatures extends Stage[LLLMParams] {
 
     cache.put('CrossIndex, cpIndex)
     cache.put('NLineGroups, Int.box(corpus.lineGroupIterator(config.featureGroupSize).length))
+    cache.put('NLines, Int.box(corpus.lineIterator.length))
   }
 
   def makeBatchNGrams(lines: Iterable[String])(implicit config: LLLMParams): Iterable[IndexedSeq[String]] = {

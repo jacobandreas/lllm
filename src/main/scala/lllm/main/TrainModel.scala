@@ -1,13 +1,16 @@
 package lllm.main
 
 import breeze.features.FeatureVector
+
 import breeze.linalg._
 import breeze.numerics.{exp, log}
 import breeze.optimize.{GradientTester, BatchDiffFunction}
 import breeze.optimize.FirstOrderMinimizer.OptParams
 import breeze.util.Index
+import erector.corpus.TextCorpusReader
 import igor.experiment.{ResultCache, Stage}
 import lllm.model._
+import scala.io.Source
 
 /**
  * @author jda
@@ -23,7 +26,7 @@ object TrainModel extends Stage[LLLMParams] {
 
     val initTheta = DenseVector.zeros[Double](config.objective.numParams(featureIndex.size))
 
-    val optParams = OptParams(useStochastic = true, batchSize = 5, maxIterations = 100, regularization = 1)
+    val optParams = OptParams(useStochastic = true, batchSize = 50, maxIterations = 200, regularization = 1)
     val objective = makeObjective(config.objective)
     //GradientTester.test(objective, initTheta, toString = (x: Int) => x.toString)
     val optTheta = optParams.minimize(objective, initTheta)
@@ -49,14 +52,23 @@ object TrainModel extends Stage[LLLMParams] {
     new BatchDiffFunction[DenseVector[Double]] {
       override def fullRange: IndexedSeq[Int] = 0 until cache.get('NLineGroups)
 
-      override def calculate(theta: DenseVector[Double], batchGroups: IndexedSeq[Int]): (Double, DenseVector[Double]) = {
+      override def calculate(theta: DenseVector[Double], batch: IndexedSeq[Int]): (Double, DenseVector[Double]) = {
+        val setBatch = batch.toSet
         var ll = 0d
         val grad = DenseVector.zeros[Double](theta.length)
-        batchGroups.foreach { batch =>
-          val (bll, bgrad) = objective(theta, batch, featureIndex)
-          ll += bll
-          grad += bgrad
+        val lines = new TextCorpusReader(Source.fromFile(config.trainPath))
+        lines.lineGroupIterator(config.featureGroupSize).zipWithIndex.filter(p => setBatch.contains(p._2)).foreach { case (batchLines, batchId) =>
+//          println(batchId)
+//          println(batchLines.mkString("\n"))
+          val (bll, bgrad) = objective(theta, batchId, batchLines, featureIndex)
+            ll += bll
+            grad += bgrad
         }
+//        batchLines.foreach { batch =>
+//          val (bll, bgrad) = objective(theta, batch, featureIndex)
+//          ll += bll
+//          grad += bgrad
+//        }
         (-ll, -grad)
       }
     }

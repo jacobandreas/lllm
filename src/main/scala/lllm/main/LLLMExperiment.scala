@@ -11,14 +11,14 @@ import lllm.model.{Hierarchical, NCE, Objective, Exact}
 case class LLLMParams(
   trainPath: String,
   testPath: String,
-  order: Int = 4,
+  order: Int = 5,
   objective: Objective = Hierarchical,
-  featureGroupSize: Int = 1000,
+  featureGroupSize: Int = 100,
   useHashing: Boolean = false,
   noiseSamples: Int = 100,
   rank: Int = 20,
   rareWordThreshold: Int = 10,
-  rareSuffixThreshold: Int = 2,
+  rareSuffixThreshold: Int = 10,
   cacheFeatures: Boolean = false,
   nLines: Int = Integer.MAX_VALUE
 )
