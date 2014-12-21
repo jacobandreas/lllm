@@ -1,10 +1,12 @@
-package lllm.model
+package lllm.old.model
 
 import breeze.features.FeatureVector
 import breeze.linalg.{DenseVector, softmax}
-import breeze.numerics.{log1p, exp, Inf}
+import breeze.numerics.{Inf, exp, log1p}
+import breeze.util.Index
 import lllm.features.Featurizer
 import lllm.main.CrossProductIndex
+import lllm.model.LanguageModel
 import lllm.util.HuffmanDict
 
 /**
@@ -32,30 +34,4 @@ class LogLinearLanguageModel(predictionFeaturizer: Featurizer,
 
   def prob(ngram: IndexedSeq[String]): Double = exp(logProb(ngram))
 
-}
-
-class HierarchicalLanguageModel(predictionFeaturizer: Featurizer,
-                                contextFeaturizer: Featurizer,
-                                index: CrossProductIndex,
-                                huffmanDict: HuffmanDict[Int],
-                                val theta: DenseVector[Double]) extends LanguageModel with Serializable {
-  def logProb(ngram: IndexedSeq[String]): Double = {
-    val contextFeatures = contextFeaturizer(ngram).flatMap(index.secondIndex.indexOpt).toArray
-    if (!index.firstIndex.contains(ngram.last)) return -Inf
-    val wordId: Int = index.firstIndex(ngram.last)
-    val code = huffmanDict.dict.get(wordId).get
-    var score = 0d
-    // TODO(jda) de-HOF-ify
-    code.tails.toArray.filter(_.nonEmpty).foreach { prefix =>
-      val decision = if (prefix.head) 1d else -1d
-      val history = prefix.tail
-      val nodeId = huffmanDict.prefixIndex(history)
-      val feats = index.crossProduct(Array(nodeId), contextFeatures)
-      score += -log1p(exp((theta dot new FeatureVector(feats)) * decision))
-    }
-    //println("giving back", score)
-    score
-  }
-
-  def prob(ngram: IndexedSeq[String]): Double = exp(logProb(ngram))
 }

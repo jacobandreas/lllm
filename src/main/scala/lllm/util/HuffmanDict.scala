@@ -16,9 +16,13 @@ case class HuffmanNode[L](weight: Double,
 
 }
 
-case class HuffmanDict[L](dict: Map[L,List[Boolean]], prefixIndex: Index[List[Boolean]])
+case class HuffmanDict[L](dict: Map[L,String], prefixIndex: Index[String]) {
+  final val constIndex = prefixIndex(HuffmanDict.Const)
+}
 
 object HuffmanDict {
+
+  final def Const = "CONST"
 
   def fromCounts[L](counts: Iterable[(L,Double)]): HuffmanDict[L] = {
     val pq = mutable.PriorityQueue[HuffmanNode[L]]()
@@ -33,23 +37,23 @@ object HuffmanDict {
     val root = pq.dequeue()
     assert(pq.isEmpty)
     val dict = leavesAndPaths(root).toMap
-    val prefixIndex = Index(prefixes(root))
+    val prefixIndex = Index(prefixes(root) ++ Seq(Const))
     HuffmanDict(dict, prefixIndex)
   }
 
   // TODO(jda) these should be inside of HuffmanNode
 
-  def leavesAndPaths[L](node: HuffmanNode[L], prefix: List[Boolean] = Nil): Iterable[(L,List[Boolean])] = {
+  def leavesAndPaths[L](node: HuffmanNode[L], prefix: String = ""): Iterable[(L,String)] = {
     if (node.label.isDefined)
       Iterable((node.label.get, prefix))
     else
-      leavesAndPaths(node.left.get, false :: prefix) ++ leavesAndPaths(node.right.get, true :: prefix)
+      leavesAndPaths(node.left.get, "0" + prefix) ++ leavesAndPaths(node.right.get, "1" + prefix)
   }
 
-  def prefixes[L](node: HuffmanNode[L], prefix: List[Boolean] = Nil): Iterable[List[Boolean]] = {
+  def prefixes[L](node: HuffmanNode[L], prefix: String = ""): Iterable[String] = {
     if (node.label.isDefined)
       Iterable()
     else
-      Iterable(prefix) ++ prefixes(node.left.get, false :: prefix) ++ prefixes(node.right.get, true :: prefix)
+      Iterable(prefix) ++ prefixes(node.left.get, "0" + prefix) ++ prefixes(node.right.get, "1" + prefix)
   }
 }

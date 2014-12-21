@@ -1,29 +1,28 @@
-package lllm.main
+package lllm.old.main
 
-import breeze.linalg.{DenseVector, Counter}
+import breeze.linalg.Counter
 import breeze.stats.distributions.Multinomial
-//import lllm.util.Multinomial
 import breeze.util.Index
 import erector.corpus.TextCorpusReader
+import erector.learning.Feature
 import erector.util.text.toNGramIterable
 import igor.experiment.{ResultCache, Stage}
-import erector.learning.Feature
 import lllm.features._
-import lllm.model.{KneserNeyLanguageModel, NCE, Hierarchical, NGramLanguageModel}
-import lllm.util.{PreprocessingIndex, HuffmanDict}
-import lllm.util.RichClasses.IndexWithOOV
-import scala.io.Source
+import lllm.main.CrossProductIndex
+import lllm.model.KneserNeyLanguageModel
+import lllm.old.model.{NCE, Hierarchical}
+import lllm.util.{HuffmanDict, PreprocessingIndex}
 
 /**
  * @author jda
  */
 object PrecomputeFeatures extends Stage[LLLMParams] {
 
-  override def run(config: LLLMParams, cache: ResultCache): Unit = {
+  override def run(implicit config: LLLMParams, cache: ResultCache): Unit = {
 
-    implicit val (_config, _cache) = (config, cache)
+    //implicit val (_config, _cache) = (config, cache)
 
-    val corpus = TextCorpusReader(config.trainPath).dummy(config.nLines)
+    val corpus = TextCorpusReader(config.trainPath).prefix(config.nLines)
     val preCounts = Counter(corpus.nGramIterator(1).map(_(0) -> 1d))
     //val wordPreprocessor = RareWordPreprocessor(preCounts, config.rareWordThreshold, UnknownWordToken)
     val contextPreprocessor = FrequentSuffixPreprocessor(preCounts, config.rareSuffixThreshold, UnknownWordToken)

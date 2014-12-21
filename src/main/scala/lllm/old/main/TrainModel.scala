@@ -1,15 +1,15 @@
-package lllm.main
-
-import breeze.features.FeatureVector
+package lllm.old.main
 
 import breeze.linalg._
-import breeze.numerics.{exp, log}
-import breeze.optimize.{GradientTester, BatchDiffFunction}
+import breeze.optimize.BatchDiffFunction
 import breeze.optimize.FirstOrderMinimizer.OptParams
 import breeze.util.Index
 import erector.corpus.TextCorpusReader
 import igor.experiment.{ResultCache, Stage}
+import lllm.main.CrossProductIndex
 import lllm.model._
+import lllm.old.model.{LogLinearLanguageModel, Objective, Hierarchical}
+
 import scala.io.Source
 
 /**
@@ -17,10 +17,10 @@ import scala.io.Source
  */
 object TrainModel extends Stage[LLLMParams] {
 
-  override def run(config: LLLMParams, cache: ResultCache): Unit = {
+  override def run(implicit config: LLLMParams, cache: ResultCache): Unit = {
 
-    implicit val _c = config
-    implicit val _r = cache
+//    implicit val _c = config
+//    implicit val _r = cache
 
     val featureIndex: CrossProductIndex = cache.getDisk('CrossIndex)
 
@@ -32,9 +32,9 @@ object TrainModel extends Stage[LLLMParams] {
     val optTheta = optParams.minimize(objective, initTheta)
     val model =
       if (config.objective == Hierarchical) {
-        new HierarchicalLanguageModel(cache.get('PredictionFeaturizer),
-                                      cache.get('ContextFeaturizer),
+        new HierarchicalLanguageModel(cache.get('ContextFeaturizer),
                                       cache.get('CrossIndex),
+                                      cache.get('VocabularyIndex),
                                       cache.get('HuffmanDict),
                                       optTheta)
       } else {

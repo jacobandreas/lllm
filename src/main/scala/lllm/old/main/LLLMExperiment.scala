@@ -1,8 +1,7 @@
-package lllm.main
+package lllm.old.main
 
-import breeze.optimize.FirstOrderMinimizer.OptParams
 import igor.experiment.Experiment
-import lllm.model.{Hierarchical, NCE, Objective, Exact}
+import lllm.old.model.{Objective, Hierarchical}
 
 /**
  * @author jda

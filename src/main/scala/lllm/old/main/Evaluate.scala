@@ -1,19 +1,16 @@
-package lllm.main
+package lllm.old.main
 
-import breeze.util.Index
-import igor.experiment.{ResultCache, Experiment, Stage}
-import lllm.model.{KneserNeyLanguageModel, LanguageModel, LogLinearLanguageModel}
-import breeze.linalg.{softmax, DenseVector}
+import breeze.numerics.{Inf, exp}
 import erector.corpus.TextCorpusReader
-import breeze.numerics.{exp, log2, log, Inf}
+import igor.experiment.{ResultCache, Stage}
+import lllm.model.LanguageModel
 
 /**
  * @author jda
  */
 object Evaluate extends Stage[LLLMParams] {
 
-  override def run(config: LLLMParams, cache: ResultCache): Unit = {
-    implicit val (_c, _r) = (config, cache)
+  override def run(implicit config: LLLMParams, cache: ResultCache): Unit = {
     val lllmModel: LanguageModel = cache.get('Model)
     val baselineModel: LanguageModel = cache.get('NGramModel)
 
@@ -22,7 +19,7 @@ object Evaluate extends Stage[LLLMParams] {
 
     models.foreach { case (name, model) =>
       logger.info(name)
-      val trainLogPP = computePerplexity(model, TextCorpusReader(config.trainPath).dummy(config.nLines))
+      val trainLogPP = computePerplexity(model, TextCorpusReader(config.trainPath).prefix(config.nLines))
       val testLogPP = computePerplexity(model, TextCorpusReader(config.testPath))
       logger.info(exp(trainLogPP).toString)
       logger.info(exp(testLogPP).toString)
