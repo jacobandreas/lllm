@@ -20,11 +20,11 @@ import java.util.zip.GZIPInputStream;
  */
 public class LmFactory implements LanguageModelFactory {
 
-    public static final int NUM_LINES = 3000000;
+    public static final int NUM_LINES = 300000;
 
     public static final double PARAM_L2 = 0.1;
-    public static final double PARTITION_L2 = 1;
-    public static final double PARTITION_FRAC = .1;
+    public static final double PARTITION_L2 = .1;
+    public static final double PARTITION_FRAC = 0.01;
 
     @Override
     public NgramLanguageModel newLanguageModel(final Iterable<List<String>> trainingData) {

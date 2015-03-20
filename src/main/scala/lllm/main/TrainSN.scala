@@ -41,17 +41,19 @@ object TrainSN extends Stage[SelfNormalizingParams] {
         val batchIds = batch.toSet
         var ll = 0d
         val grad = DenseVector.zeros[Double](theta.length)
+//        var gll = 0d
+//        var ggrad = DenseVector.zeros[Double](theta.length)
         val lines = TextCorpusReader(config.trainPath).prefix(config.numLines)
         lines.lineGroupIterator(config.lineGroupSize).zipWithIndex.filter(p => batchIds.contains(p._2)).foreach { case (batchLines, batchId) =>
           logger.info(s"batch $batchId")
 //          val (bll, bgrad) = batchLines.par.map { line =>
           batchLines.foreach { line =>
-            //          val (bll, bgrad) = batchLines.par.aggregate((0d, DenseVector.zeros[Double](theta.length)))({ (soFar, line) =>
+//          val (bll, bgrad) = batchLines.par.aggregate((0d, DenseVector.zeros[Double](theta.length)))({ (soFar, line) =>
 
-            //            var lll = soFar._1
-            //            val lgrad = soFar._2
-            //            var lll = 0d
-            //            val lgrad = SparseVector.zeros[Double](theta.length)
+//            var ll = soFar._1
+//            val grad = soFar._2
+//            var lll = 0d
+//            val lgrad = SparseVector.zeros[Double](theta.length)
             // start symbol?
             val nGrams = (line.split(" ") :+ erector.util.text.DefaultStartSymbol).toIndexedSeq.nGrams(config.order).toArray
             cforRange(0 until nGrams.length) { iNGram =>
@@ -68,57 +70,63 @@ object TrainSN extends Stage[SelfNormalizingParams] {
                 axpy(1d, topFeats, grad)
 
                 // normalizer
-                //                val bottomFeats = Array.ofDim[FeatureVector](vocabIndex.size)
-                //                val bottomScores = Array.ofDim[Double](vocabIndex.size)
-                //                cforRange (0 until vocabIndex.size) { i =>
-                //                  val fv = new FeatureVector(productIndex.crossProduct(Array(i), contextIds))
-                //                  bottomFeats(i) = fv
-                //                  bottomScores(i) = exp(theta dot fv)
-                //                }
-                //                val bottomScoresSum = sum(bottomScores)
-                //                val invBottomScoresSum = 1 / sum(bottomScores)
-                //                val logBottomScoresSum = log(bottomScoresSum)
-                //                ll -= logBottomScoresSum
-                //                cforRange (0 until bottomFeats.length) { i =>
-                //                  axpy(-bottomScores(i) * invBottomScoresSum, bottomFeats(i), grad)
-                //                }
-
-                //                val partitionPenalty = bottomScoresSum - 1
-                //                ll -= config.partitionL2 * 0.5 * partitionPenalty * partitionPenalty
-                //                cforRange (0 until bottomFeats.length) { i =>
-                //                  axpy(-(bottomScores(i) * invBottomScoresSum + config.partitionL2 * partitionPenalty * bottomScores(i)), bottomFeats(i), grad)
-                //                }
+                val bottomFeats = Array.ofDim[FeatureVector](vocabIndex.size)
+                val bottomScores = Array.ofDim[Double](vocabIndex.size)
+                cforRange (0 until vocabIndex.size) { i =>
+                  val fv = new FeatureVector(productIndex.crossProduct(Array(i), contextIds))
+                  bottomFeats(i) = fv
+                  bottomScores(i) = exp(theta dot fv)
+                }
+                val bottomScoresSum = sum(bottomScores)
+                val invBottomScoresSum = 1 / sum(bottomScores)
+                val logBottomScoresSum = log(bottomScoresSum)
+                ll -= logBottomScoresSum
+                cforRange (0 until bottomFeats.length) { i =>
+                  axpy(-bottomScores(i) * invBottomScoresSum, bottomFeats(i), grad)
+                }
+//                val partitionPenalty = bottomScoresSum - 1
+//                ll -= config.partitionL2 * 0.5 * partitionPenalty * partitionPenalty
+//                cforRange (0 until bottomFeats.length) { i =>
+//                  axpy(-(bottomScores(i) * invBottomScoresSum + config.partitionL2 * partitionPenalty * bottomScores(i)), bottomFeats(i), grad)
+//                }
+                val partitionPenalty = log(bottomScoresSum)
+                ll -= config.partitionL2 * 0.5 * partitionPenalty * partitionPenalty
+                cforRange (0 until bottomFeats.length) { i =>
+//                  axpy(-(1 + partitionPenalty) * bottomScores(i) * invBottomScoresSum, bottomFeats(i), grad)
+                  axpy(-config.partitionL2 * partitionPenalty * bottomScores(i) * invBottomScoresSum, bottomFeats(i), grad)
+                }
 
                 // partition penalty
-                if (Random.nextDouble() < config.partitionFrac) {
-                  //                if (true) {
-                  val bottomFeats = Array.ofDim[FeatureVector](vocabIndex.size)
-                  val bottomScores = Array.ofDim[Double](vocabIndex.size)
-                  cforRange(0 until vocabIndex.size) { i =>
-                    val ai = arrIndices(i)
-                    val fv = new FeatureVector(productIndex.crossProduct(ai, contextIds))
-                    bottomFeats(i) = fv
-                    bottomScores(i) = exp(theta dot fv)
-                  }
-                  val bottomScoresSum = sum(bottomScores)
-                  val bottomScoresSumInv = 1d / bottomScoresSum
-                  val logBottomScoresSum = log(bottomScoresSum)
-                  val partitionPenalty = logBottomScoresSum
-                  //                  lll -= config.partitionL2 * partitionFreq * 0.5 * partitionPenalty * partitionPenalty
-                  ll -= config.partitionL2 * partitionFreq * 0.5 * partitionPenalty * partitionPenalty
-                  cforRange(0 until bottomFeats.length) { i =>
-                    //                    axpy(-config.partitionL2 * partitionFreq * logBottomScoresSum * bottomScoresSumInv * bottomScores(i), bottomFeats(i), lgrad)
-                    axpy(-config.partitionL2 * partitionFreq * logBottomScoresSum * bottomScoresSumInv * bottomScores(i), bottomFeats(i), grad)
-                  }
-                }
+//                if (Random.nextDouble() < config.partitionFrac) {
+//                  //                if (true) {
+//                  val bottomFeats = Array.ofDim[FeatureVector](vocabIndex.size)
+//                  val bottomScores = Array.ofDim[Double](vocabIndex.size)
+//                  cforRange(0 until vocabIndex.size) { i =>
+//                    val ai = arrIndices(i)
+//                    val fv = new FeatureVector(productIndex.crossProduct(ai, contextIds))
+//                    bottomFeats(i) = fv
+//                    bottomScores(i) = exp(theta dot fv)
+//                  }
+//                  val bottomScoresSum = sum(bottomScores)
+//                  val bottomScoresSumInv = 1d / bottomScoresSum
+//                  val logBottomScoresSum = log(bottomScoresSum)
+//                  val partitionPenalty = logBottomScoresSum
+//                  //                  lll -= config.partitionL2 * partitionFreq * 0.5 * partitionPenalty * partitionPenalty
+//                  ll -= config.partitionL2 * partitionFreq * 0.5 * partitionPenalty * partitionPenalty
+//                  cforRange(0 until bottomFeats.length) { i =>
+//                    //                    axpy(-config.partitionL2 * partitionFreq * logBottomScoresSum * bottomScoresSumInv * bottomScores(i), bottomFeats(i), lgrad)
+//                    axpy(-config.partitionL2 * partitionFreq * logBottomScoresSum * bottomScoresSumInv * bottomScores(i), bottomFeats(i), grad)
+//                  }
+//                }
               }
             }
           }
-//            (lll, lgrad)
+//            (ll, grad)
 //          }, { (p1, p2) => (p1._1 + p2._1, p1._2 + p2._2) })
-//          ll += bll
-//          grad += bgrad
+//          gll += bll
+//          ggrad += bgrad
         }
+//        (-gll, -ggrad)
         (-ll, -grad)
       }
     }
